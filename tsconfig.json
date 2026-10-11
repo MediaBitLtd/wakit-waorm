@@ -1,11 +1,10 @@
 {
   // Visit https://aka.ms/tsconfig to read more about this file
   "compilerOptions": {
-//    "rootDir": "./",
+    //    "rootDir": "./",
     "outDir": "./dist",
     "module": "ESNext",
-    "target": "esnext",
-    "moduleResolution": "bundler",
+    "target": "ESNext",
     "types": [],
 
     // Other Outputs
@@ -17,22 +16,16 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
 
-    // Style Options
-    // "noImplicitReturns": true,
-    // "noImplicitOverride": true,
-    // "noUnusedLocals": true,
-    // "noUnusedParameters": true,
-    // "noFallthroughCasesInSwitch": true,
-    // "noPropertyAccessFromIndexSignature": true,
+    "moduleResolution": "Bundler",
 
     // Recommended Options
     "strict": true,
-    "jsx": "react-jsx",
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "noUncheckedSideEffectImports": true,
     "moduleDetection": "force",
     "skipLibCheck": true,
   },
-  "exclude": ["tests", "vitest.config.ts"]
+  "include": ["**/*.ts"],
+  "exclude": ["eslint.config.ts", "dist"]
 }
