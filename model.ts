@@ -234,6 +234,46 @@ export default abstract class Model <R = ModelResource, E = any> {
     }
   }
 
+  // belongsMany helpers: update the local keys array and save
+  async attach(relationship: string, keys: WaormKey | WaormKey[]): Promise<this> {
+    const relation = this.belongsManyRelation(relationship)
+
+    return this.sync(relationship, [...this.relatedKeys(relation), ...(Array.isArray(keys) ? keys : [keys])])
+  }
+
+  async detach(relationship: string, keys: WaormKey | WaormKey[]): Promise<this> {
+    const relation = this.belongsManyRelation(relationship)
+    const remove = (Array.isArray(keys) ? keys : [keys]).map(key => this.parseKey(key))
+
+    return this.sync(relationship, this.relatedKeys(relation).filter(key => ! remove.includes(this.parseKey(key))))
+  }
+
+  async sync(relationship: string, keys: WaormKey[]): Promise<this> {
+    const relation = this.belongsManyRelation(relationship)
+    const seen = new Set<number | string>()
+
+    // New array, hydrate may share the previous one with the source data
+    // @ts-ignore
+    this[relation.foreignKey] = keys.filter(key => {
+      const parsed = this.parseKey(key)
+
+      if (seen.has(parsed)) {
+        return false
+      }
+
+      seen.add(parsed)
+      return true
+    })
+
+    await this.save()
+
+    if (this[paramBagSymbol]?.preloadRelations?.[relationship]) {
+      await this.loadRelationship(relationship, relation)
+    }
+
+    return this
+  }
+
   async find(field: string, search: any): Promise<this|undefined> {
     try {
       const data = await this.connection()?.where(this.storeName(), field, search)
@@ -338,34 +378,72 @@ export default abstract class Model <R = ModelResource, E = any> {
 
   protected async loadRelationships(): Promise<this> {
     for (const relationship in this[paramBagSymbol]?.preloadRelations) {
-      if (this[paramBagSymbol]?.preloadRelations[relationship]) {
-        const relation: WaormRelationship | undefined = this[paramBagSymbol].preloadRelations[relationship]
+      const relation: WaormRelationship | undefined = this[paramBagSymbol]?.preloadRelations[relationship]
 
-        if (! relation) {
-          continue
-        }
-
-        // @ts-ignore
-        const model = (new relation.related)
-
-        switch (relation.relationship) {
-          case 'belongs':
-            // @ts-ignore
-            this[relationship] = await model.get(this.parseKey(this[relation.foreignKey]))
-            break
-          case 'one':
-            // @ts-ignore
-            this[relationship] = await model.find(relation.foreignKey, this.parseKey(this.getKey()))
-            break
-          case 'many':
-            // @ts-ignore
-            this[relationship] = await model.many(relation.foreignKey, this.parseKey(this.getKey()), { limit: 10_000, operator: 'equals_many' })
-            break
-        }
+      if (relation) {
+        await this.loadRelationship(relationship, relation)
       }
     }
 
     return this
+  }
+
+  protected async loadRelationship(relationship: string, relation: WaormRelationship): Promise<void> {
+    // @ts-ignore
+    const model = (new relation.related)
+
+    switch (relation.relationship) {
+      case 'belongs':
+        // @ts-ignore
+        this[relationship] = await model.get(this.parseKey(this[relation.foreignKey]))
+        break
+      case 'one':
+        // @ts-ignore
+        this[relationship] = await model.find(relation.foreignKey, this.parseKey(this.getKey()))
+        break
+      case 'many':
+        // @ts-ignore
+        this[relationship] = await model.many(relation.foreignKey, this.parseKey(this.getKey()), { limit: 10_000, operator: 'equals_many' })
+        break
+      case 'belongsMany': {
+        const items = []
+
+        for (const key of this.relatedKeys(relation)) {
+          // Fresh instance per key, get() hydrates in place
+          // @ts-ignore
+          const item = await (new relation.related).get(this.parseKey(key))
+
+          if (item) {
+            items.push(item)
+          }
+        }
+
+        // @ts-ignore
+        this[relationship] = items
+        break
+      }
+    }
+  }
+
+  protected belongsManyRelation(relationship: string): WaormRelationship {
+    const relation: WaormRelationship | undefined = this.relationships()[relationship]
+
+    if (! relation) {
+      throw new Error(`No relationship setup for this model with the key: ${relationship}`)
+    }
+
+    if (relation.relationship !== 'belongsMany') {
+      throw new Error(`Relationship ${relationship} is not a belongsMany relationship`)
+    }
+
+    return relation
+  }
+
+  protected relatedKeys(relation: WaormRelationship): WaormKey[] {
+    // @ts-ignore
+    const keys = this[relation.foreignKey]
+
+    return Array.isArray(keys) ? keys : []
   }
 
   protected parseKey(key: Resource['id']|undefined): number|string {

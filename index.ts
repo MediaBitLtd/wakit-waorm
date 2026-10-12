@@ -59,7 +59,7 @@ export interface WaormDatabaseConfig<T> {
 
 export interface WaormRelationship {
   related: typeof Model;
-  relationship:  'one' | 'many' | 'belongs';
+  relationship:  'one' | 'many' | 'belongs' | 'belongsMany';
   foreignKey: string;
 }
 
@@ -82,6 +82,7 @@ export interface WaormStoreIndex {
   name: string;
   path?: string;
   unique?: boolean;
+  multiEntry?: boolean;
 }
 
 export {

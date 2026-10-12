@@ -59,20 +59,20 @@ const syncSchema = (database: IDBDatabase, transaction: IDBTransaction, config: 
       .filter(name => ! store.indexes.some(index => index.name === name))
       .forEach(name => dbStore.deleteIndex(name))
 
-    store.indexes.forEach(({ name, path, unique = false }) => {
+    store.indexes.forEach(({ name, path, unique = false, multiEntry = false }) => {
       const keyPath = path || name
 
       if (dbStore.indexNames.contains(name)) {
         const existing = dbStore.index(name)
 
-        if (existing.keyPath === keyPath && existing.unique === unique) {
+        if (existing.keyPath === keyPath && existing.unique === unique && existing.multiEntry === multiEntry) {
           return
         }
 
         dbStore.deleteIndex(name)
       }
 
-      dbStore.createIndex(name, keyPath, { unique })
+      dbStore.createIndex(name, keyPath, { unique, multiEntry })
     })
   })
 }
