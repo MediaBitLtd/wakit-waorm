@@ -10,20 +10,84 @@ const getByKey = (db: string, store: string, key?: string): Resource|undefined =
   return data ? JSON.parse(data) as Resource : undefined
 }
 
+const rebuildIndex = (db: string, store: string, index: string, field: string, keys: (string | number)[]) => {
+  const values: { [k: string]: (string | number)[] } = {}
+
+  keys.forEach(key => {
+    const indexedValue = (getByKey(db, store, key.toString()) as any)?.[field]?.toString()
+
+    if (indexedValue) {
+      values[indexedValue] = [...(values[indexedValue] ?? []), key]
+    }
+  })
+
+  localStorage.setItem(`WAORM:__${db}_${store}_${index}`, JSON.stringify(values))
+}
+
+const dropStore = (db: string, store: string) => {
+  const indexTable = JSON.parse(localStorage.getItem(`WAORM:__${db}_${store}`) || '{}')
+
+  for (const key of indexTable.__keys ?? []) {
+    localStorage.removeItem(`WAORM:${db}_${store}:${key.toString()}`)
+  }
+
+  for (const k in indexTable) {
+    if (k !== '__keys') {
+      localStorage.removeItem(`WAORM:__${db}_${store}_${k}`)
+    }
+  }
+
+  localStorage.removeItem(`WAORM:__${db}_${store}`)
+}
+
+const syncStores = (config: WaormDatabaseConfig<WindowLocalStorage>) => {
+  const registryKey = `WAORM:__registry:${config.name}`
+  const knownStores: string[] = JSON.parse(localStorage.getItem(registryKey) || '{}').stores ?? []
+  const configStores = config.stores.map(store => store.name)
+
+  if (config.dropUnknownStores) {
+    knownStores
+      .filter(name => ! configStores.includes(name))
+      .forEach(name => dropStore(config.name, name))
+  }
+
+  // Keep unknown stores registered until dropped, so a later dropUnknownStores still finds them
+  const stores = config.dropUnknownStores ? configStores : [...new Set([...knownStores, ...configStores])]
+
+  localStorage.setItem(registryKey, JSON.stringify({ stores }))
+}
+
 const createDB = (config: WaormDatabaseConfig<WindowLocalStorage>): WaormDatabaseConnection<WindowLocalStorage> => {
+  syncStores(config)
+
   config.stores.forEach(store => {
     const indexTable = JSON.parse(localStorage.getItem(`WAORM:__${config.name}_${store.name}`) || '{}')
+    const keys = indexTable['__keys'] ?? []
+
+    for (const k in indexTable) {
+      if (k !== '__keys' && ! store.indexes.some(index => index.name === k)) {
+        delete indexTable[k]
+        localStorage.removeItem(`WAORM:__${config.name}_${store.name}_${k}`)
+      }
+    }
 
     store.indexes.forEach(index => {
+      const field = index.path || index.name
+      const previous = indexTable[index.name]
+
       indexTable[index.name] = {
-        ...indexTable[index.name],
         ...index,
-        key: index.path || index.name,
+        key: field,
         table: `__${config.name}_${store.name}_${index.name}`
+      }
+
+      // New index on existing data, or index now points at another field
+      if (keys.length && previous?.key !== field) {
+        rebuildIndex(config.name, store.name, index.name, field, keys)
       }
     })
 
-    indexTable['__keys'] = indexTable['__keys'] ?? []
+    indexTable['__keys'] = keys
 
     localStorage.setItem(`WAORM:__${config.name}_${store.name}`, JSON.stringify(indexTable))
   })
@@ -115,15 +179,16 @@ const createDB = (config: WaormDatabaseConfig<WindowLocalStorage>): WaormDatabas
       let i = 0
 
       const indexValues = JSON.parse(localStorage.getItem(`WAORM:__${config.name}_${store}_${index}`) || '{}')
+      const indexKeys = Object.keys(indexValues).sort()
 
       if (direction !== 'asc') {
-        indexValues.reverse()
+        indexKeys.reverse()
       }
 
       switch (operator) {
         case 'equals': return getByKey(config.name, store, indexValues[search] ? indexValues[search][0] : undefined)
         case 'equals_many':
-          for (const k in indexValues) {
+          for (const k of indexKeys) {
             if (i++ < offset) {
               continue
             }
@@ -149,7 +214,7 @@ const createDB = (config: WaormDatabaseConfig<WindowLocalStorage>): WaormDatabas
 
           return items
         case 'not_equals':
-          for (const k in indexValues) {
+          for (const k of indexKeys) {
             if (i++ < offset) {
               continue
             }
@@ -175,7 +240,7 @@ const createDB = (config: WaormDatabaseConfig<WindowLocalStorage>): WaormDatabas
 
           return items
         case 'includes':
-          for (const k in indexValues) {
+          for (const k of indexKeys) {
             if (i++ < offset) {
               continue
             }
@@ -201,7 +266,7 @@ const createDB = (config: WaormDatabaseConfig<WindowLocalStorage>): WaormDatabas
 
           return items
         case 'not_includes':
-          for (const k in indexValues) {
+          for (const k of indexKeys) {
             if (i++ < offset) {
               continue
             }

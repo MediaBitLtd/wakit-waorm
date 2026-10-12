@@ -3,8 +3,8 @@ import type {
   WaormConnectionPlugin,
   WaormDatabaseConfig,
   WaormDatabaseConnection,
-  WaormStore
 } from '../index'
+import { DB_BLOCKED, DB_VERSION_CHANGE, dispatch } from '../events'
 
 interface CursorRequestEventTarget extends EventTarget{
   result: IDBCursorWithValue
@@ -43,24 +43,47 @@ const handleRequest = async <T = any>(request: IDBRequest, callback?: (e: Cursor
   }
 })
 
-const createStore = (database: IDBDatabase, transaction: IDBTransaction, store: WaormStore) => {
-  if (database.objectStoreNames.contains(store.name)) {
-    store.indexes.forEach(({ name, path, unique }) => {
-      if (! transaction.objectStore(store.name).indexNames.contains(name)) {
-        // @ts-ignore
-        transaction.objectStore(store.name).createIndex(name, path || name, { unique })
-      }
-    })
-    return
+const syncSchema = (database: IDBDatabase, transaction: IDBTransaction, config: WaormDatabaseConfig<IDBDatabase>) => {
+  if (config.dropUnknownStores) {
+    Array.from(database.objectStoreNames)
+      .filter(name => ! config.stores.some(store => store.name === name))
+      .forEach(name => database.deleteObjectStore(name))
   }
 
-  const dbStore = database.createObjectStore(store.name)
-  store.indexes.forEach(({ name, path, unique }) =>
-    // @ts-ignore
-    dbStore.createIndex(name, path || name, { unique }))
+  config.stores.forEach(store => {
+    const dbStore = database.objectStoreNames.contains(store.name)
+      ? transaction.objectStore(store.name)
+      : database.createObjectStore(store.name)
+
+    Array.from(dbStore.indexNames)
+      .filter(name => ! store.indexes.some(index => index.name === name))
+      .forEach(name => dbStore.deleteIndex(name))
+
+    store.indexes.forEach(({ name, path, unique = false }) => {
+      const keyPath = path || name
+
+      if (dbStore.indexNames.contains(name)) {
+        const existing = dbStore.index(name)
+
+        if (existing.keyPath === keyPath && existing.unique === unique) {
+          return
+        }
+
+        dbStore.deleteIndex(name)
+      }
+
+      dbStore.createIndex(name, keyPath, { unique })
+    })
+  })
 }
 
 const createDatabaseConnection = (config: WaormDatabaseConfig<IDBDatabase>, idb: IDBDatabase): WaormDatabaseConnection<IDBDatabase> => {
+  // Let newer versions (e.g. another tab) upgrade instead of being blocked by this connection
+  idb.onversionchange = e => {
+    dispatch(DB_VERSION_CHANGE, { name: idb.name, oldVersion: e.oldVersion, newVersion: e.newVersion })
+    idb.close()
+  }
+
   return {
     name: idb.name,
     config,
@@ -134,27 +157,30 @@ const createDatabaseConnection = (config: WaormDatabaseConfig<IDBDatabase>, idb:
               return true
             }
 
+            // Index key resolves the index path (cursor.value[index] breaks when path differs from name)
+            const indexedValue = cursor.key.toString()
+
             switch (operator) {
               case 'equals':
                 items.push(cursor.value)
                 break
               case 'equals_many':
-                if (cursor.value[index].toString() === search?.toString()) {
+                if (indexedValue === search?.toString()) {
                   items.push(cursor.value)
                 }
                 break
               case 'not_equals':
-                if (cursor.value[index].toString() !== search?.toString()) {
+                if (indexedValue !== search?.toString()) {
                   items.push(cursor.value)
                 }
                 break
               case 'includes':
-                if (cursor.value[index].toString().includes(search?.toString())) {
+                if (indexedValue.includes(search?.toString())) {
                   items.push(cursor.value)
                 }
                 break
               case 'not_includes':
-                if (! cursor.value[index].toString().includes(search?.toString())) {
+                if (! indexedValue.includes(search?.toString())) {
                   items.push(cursor.value)
                 }
                 break
@@ -229,22 +255,14 @@ const plugin: WaormConnectionPlugin<IDBDatabase> = {
   setup: async (config) => {
     const openRequest = indexedDB.open(config.name, config.version)
 
-    openRequest.onblocked = () => {
-      // todo this
+    // Request stays pending until other connections close
+    openRequest.onblocked = e => {
+      dispatch(DB_BLOCKED, { name: config.name, oldVersion: e.oldVersion, newVersion: e.newVersion })
     }
 
-    openRequest.onupgradeneeded = (e: IDBVersionChangeEvent) => {
-      // @ts-ignore
-      const idb = e.target.result
+    openRequest.onupgradeneeded = () => syncSchema(openRequest.result, openRequest.transaction!, config)
 
-      config.stores.forEach(store => {
-        // @ts-ignore
-        createStore(idb, e.target.transaction, store)
-        // todo delete existing stores and indexes that are not in config
-      })
-    }
-
-    const idb = await handleRequest(openRequest)
+    const idb = await handleRequest<IDBDatabase>(openRequest)
 
     return createDatabaseConnection(config, idb)
   }

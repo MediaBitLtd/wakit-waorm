@@ -1,5 +1,7 @@
 export const DB_INIT_ERROR = 'database_initialization_error'
 export const MODEL_OP_ERROR = 'model_operation_error'
+export const DB_BLOCKED = 'database_blocked'
+export const DB_VERSION_CHANGE = 'database_version_change'
 
 export type WaormEventCallback = (context?: any) => void
 
@@ -48,3 +50,9 @@ export const offDatabaseInitError = (callback: WaormEventCallback) => removeEven
 
 export const onModelOperationError = (callback: WaormEventCallback) => setupEventListener(MODEL_OP_ERROR, callback)
 export const offModelOperationError = (callback: WaormEventCallback) => removeEventListener(MODEL_OP_ERROR, callback)
+
+export const onDatabaseBlocked = (callback: WaormEventCallback) => setupEventListener(DB_BLOCKED, callback)
+export const offDatabaseBlocked = (callback: WaormEventCallback) => removeEventListener(DB_BLOCKED, callback)
+
+export const onDatabaseVersionChange = (callback: WaormEventCallback) => setupEventListener(DB_VERSION_CHANGE, callback)
+export const offDatabaseVersionChange = (callback: WaormEventCallback) => removeEventListener(DB_VERSION_CHANGE, callback)

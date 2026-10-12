@@ -115,7 +115,7 @@ const createDB = (config: WaormDatabaseConfig<MemoryEngine>): WaormDatabaseConne
           if (! keys || keys.length === 0) {
             return undefined
           }
-          return storeData.get(keys[0])
+          return storeData.get(keys[0]!)
         }
         case 'equals_many': {
           const items: Resource[] = []

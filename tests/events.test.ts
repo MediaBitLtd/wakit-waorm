@@ -1,5 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { dispatch, onDatabaseInitError, offDatabaseInitError, onModelOperationError, offModelOperationError, clearEventListeners, DB_INIT_ERROR, MODEL_OP_ERROR } from '../events'
+import {
+  dispatch,
+  onDatabaseInitError,
+  offDatabaseInitError,
+  onModelOperationError,
+  offModelOperationError,
+  onDatabaseBlocked,
+  offDatabaseBlocked,
+  onDatabaseVersionChange,
+  offDatabaseVersionChange,
+  clearEventListeners,
+  DB_INIT_ERROR,
+  MODEL_OP_ERROR,
+  DB_BLOCKED,
+  DB_VERSION_CHANGE,
+} from '../events'
 
 beforeEach(() => {
   clearEventListeners()
@@ -48,6 +63,28 @@ describe('events', () => {
     offModelOperationError(cb)
     dispatch(MODEL_OP_ERROR, 'err')
     expect(cb).not.toHaveBeenCalled()
+  })
+
+  it('fires and removes onDatabaseBlocked callback', () => {
+    const cb = vi.fn()
+    onDatabaseBlocked(cb)
+    dispatch(DB_BLOCKED, { name: 'db' })
+    expect(cb).toHaveBeenCalledWith({ name: 'db' })
+
+    offDatabaseBlocked(cb)
+    dispatch(DB_BLOCKED, { name: 'db' })
+    expect(cb).toHaveBeenCalledTimes(1)
+  })
+
+  it('fires and removes onDatabaseVersionChange callback', () => {
+    const cb = vi.fn()
+    onDatabaseVersionChange(cb)
+    dispatch(DB_VERSION_CHANGE, { name: 'db' })
+    expect(cb).toHaveBeenCalledWith({ name: 'db' })
+
+    offDatabaseVersionChange(cb)
+    dispatch(DB_VERSION_CHANGE, { name: 'db' })
+    expect(cb).toHaveBeenCalledTimes(1)
   })
 
   it('off only removes the specified listener, others remain', () => {
