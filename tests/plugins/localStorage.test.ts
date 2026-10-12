@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, beforeEach } from 'vitest'
 import plugin from '../../plugins/localStorage'
-import type { WaormDatabaseConfig } from '../../index'
+import type { Resource, WaormDatabaseConfig } from '../../index'
 import { makeConfig, names, runPluginSuite, seed } from '../helpers/pluginSuite'
 
 describe('localStorage plugin', () => {
@@ -68,6 +68,18 @@ describe('localStorage plugin', () => {
 
       expect(await conn.where('users', 'mail', 'Bob')).toMatchObject({ id: 'u2' })
       expect(await conn.where('users', 'mail', 'b@t.com')).toBeUndefined()
+    })
+
+    it('rebuilds index whose multiEntry changed', async () => {
+      const conn = await plugin.setup(makeConfig('ls-test'))
+      await conn.set('users', 'u1', { id: 'u1', name: 'Alice', roles: ['admin', 'editor'] } as Resource)
+
+      const flat = await plugin.setup({ name: 'ls-test', stores: [{ name: 'users', indexes: [{ name: 'roles' }] }] })
+      expect(await flat.where('users', 'roles', 'admin')).toBeUndefined()
+      expect(await flat.where('users', 'roles', 'admin,editor')).toMatchObject({ id: 'u1' })
+
+      const multi = await plugin.setup({ name: 'ls-test', stores: [{ name: 'users', indexes: [{ name: 'roles', multiEntry: true }] }] })
+      expect(await multi.where('users', 'roles', 'editor')).toMatchObject({ id: 'u1' })
     })
 
     it('keeps unknown stores by default', async () => {

@@ -1,4 +1,5 @@
 import type { Resource, WaormConnectionPlugin, WaormDatabaseConfig, WaormDatabaseConnection, WaormCursorOptions, WaormSearchOptions } from '../../index'
+import { isValueOperator, matchesValue } from '../../operators'
 
 type Store = Map<string, Resource>
 type IndexMap = Map<string, string[]> // indexValue -> keys[]
@@ -29,13 +30,18 @@ const updateIndexes = (engine: MemoryEngine, config: WaormDatabaseConfig<MemoryE
       }
     }
 
-    // Add new index value
-    const value = (data as any)[fieldPath]?.toString()
-    if (value !== undefined && value !== null) {
-      if (! indexMap.has(value)) {
-        indexMap.set(value, [])
+    // Add new index value(s), multiEntry indexes each array element
+    const raw = (data as any)[fieldPath]
+    const values: unknown[] = index.multiEntry && Array.isArray(raw) ? [...new Set(raw)] : [raw]
+
+    for (const v of values) {
+      const value = v?.toString()
+      if (value !== undefined && value !== null) {
+        if (! indexMap.has(value)) {
+          indexMap.set(value, [])
+        }
+        indexMap.get(value)!.push(key)
       }
-      indexMap.get(value)!.push(key)
     }
   })
 }
@@ -108,6 +114,14 @@ const createDB = (config: WaormDatabaseConfig<MemoryEngine>): WaormDatabaseConne
       }
 
       const storeData = engine.stores.get(store)!
+
+      if (isValueOperator(operator)) {
+        const indexConfig = config.stores.find(s => s.name === store)?.indexes.find(i => i.name === index)
+        const fieldPath = indexConfig?.path || index
+        const items = [...storeData.values()].filter(r => matchesValue((r as any)[fieldPath], operator))
+
+        return applyPagination(items, options)
+      }
 
       switch (operator) {
         case 'equals': {

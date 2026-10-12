@@ -5,7 +5,7 @@ export const makeConfig = <T>(name: string): WaormDatabaseConfig<T> => ({
   name,
   version: 1,
   stores: [
-    { name: 'users', indexes: [{ name: 'name' }, { name: 'email' }, { name: 'mail', path: 'email' }] },
+    { name: 'users', indexes: [{ name: 'name' }, { name: 'email' }, { name: 'mail', path: 'email' }, { name: 'roles', multiEntry: true }] },
   ],
 })
 
@@ -131,6 +131,77 @@ export const runPluginSuite = <T>(connect: () => Promise<WaormDatabaseConnection
 
     it('respects offset', async () => {
       expect(names(await conn.where('users', 'name', 'Ali', { operator: 'includes', offset: 1 }))).toEqual(['Alicia'])
+    })
+  })
+
+  describe('value operators', () => {
+    const ids = (result: Resource[] | Resource | undefined) => (result as Resource[]).map(r => r.id)
+
+    beforeEach(async () => {
+      await conn.set('users', 'u5', { id: 'u5', name: 'Eve', email: null } as unknown as Resource)
+      await conn.set('users', 'u6', { id: 'u6', name: 'Frank', roles: {} } as unknown as Resource)
+      await conn.set('users', 'u7', { id: 'u7', name: 'Gina', email: '' } as Resource)
+      await conn.set('users', 'u8', { id: 'u8', name: 'Hank', email: 'h@t.com', roles: [] } as Resource)
+      await conn.set('users', 'u9', { id: 'u9', name: 'Ivy', email: 'i@t.com', roles: ['admin'] } as Resource)
+    })
+
+    it('is_null matches null and missing', async () => {
+      expect(ids(await conn.where('users', 'email', '', { operator: 'is_null' }))).toEqual(['u5', 'u6'])
+    })
+
+    it('is_not_null keeps empty string', async () => {
+      expect(ids(await conn.where('users', 'email', '', { operator: 'is_not_null' }))).toEqual(['u1', 'u2', 'u3', 'u4', 'u7', 'u8', 'u9'])
+    })
+
+    it('empty matches null, missing and empty string', async () => {
+      expect(ids(await conn.where('users', 'email', '', { operator: 'empty' }))).toEqual(['u5', 'u6', 'u7'])
+      expect(ids(await conn.where('users', 'email', '', { operator: 'not_empty' }))).toEqual(['u1', 'u2', 'u3', 'u4', 'u8', 'u9'])
+    })
+
+    it('empty matches empty arrays and objects', async () => {
+      expect(ids(await conn.where('users', 'roles', '', { operator: 'empty' }))).toEqual(['u1', 'u2', 'u3', 'u4', 'u5', 'u6', 'u7', 'u8'])
+      expect(ids(await conn.where('users', 'roles', '', { operator: 'not_empty' }))).toEqual(['u9'])
+    })
+
+    it('uses index path', async () => {
+      expect(ids(await conn.where('users', 'mail', '', { operator: 'is_null' }))).toEqual(['u5', 'u6'])
+    })
+
+    it('applies direction, offset and limit to matches', async () => {
+      expect(ids(await conn.where('users', 'email', '', { operator: 'empty', direction: 'desc' }))).toEqual(['u7', 'u6', 'u5'])
+      expect(ids(await conn.where('users', 'email', '', { operator: 'empty', offset: 1 }))).toEqual(['u6', 'u7'])
+      expect(ids(await conn.where('users', 'email', '', { operator: 'empty', offset: 1, limit: 1 }))).toEqual(['u6'])
+    })
+  })
+
+  describe('multiEntry index', () => {
+    const ids = (result: Resource[] | Resource | undefined) => (result as Resource[]).map(r => r.id).sort()
+
+    beforeEach(async () => {
+      await conn.set('users', 'u1', { id: 'u1', name: 'Alice', email: 'a@t.com', roles: ['admin', 'editor'] } as Resource)
+      await conn.set('users', 'u2', { id: 'u2', name: 'Bob', email: 'b@t.com', roles: ['editor'] } as Resource)
+    })
+
+    it('equals matches any array element', async () => {
+      expect(await conn.where('users', 'roles', 'admin')).toMatchObject({ id: 'u1' })
+    })
+
+    it('equals_many returns every resource containing the element', async () => {
+      expect(ids(await conn.where('users', 'roles', 'editor', { operator: 'equals_many' }))).toEqual(['u1', 'u2'])
+      expect(ids(await conn.where('users', 'roles', 'admin', { operator: 'equals_many' }))).toEqual(['u1'])
+    })
+
+    it('set reindexes removed elements', async () => {
+      await conn.set('users', 'u1', { id: 'u1', name: 'Alice', email: 'a@t.com', roles: ['admin'] } as Resource)
+
+      expect(ids(await conn.where('users', 'roles', 'editor', { operator: 'equals_many' }))).toEqual(['u2'])
+    })
+
+    it('delete removes every element entry', async () => {
+      await conn.delete('users', 'u1')
+
+      expect(await conn.where('users', 'roles', 'admin')).toBeUndefined()
+      expect(ids(await conn.where('users', 'roles', 'editor', { operator: 'equals_many' }))).toEqual(['u2'])
     })
   })
 }

@@ -5,6 +5,7 @@ import type {
   WaormDatabaseConnection,
 } from '../index'
 import { DB_BLOCKED, DB_VERSION_CHANGE, dispatch } from '../events'
+import { isValueOperator, matchesValue } from '../operators'
 
 interface CursorRequestEventTarget extends EventTarget{
   result: IDBCursorWithValue
@@ -59,20 +60,20 @@ const syncSchema = (database: IDBDatabase, transaction: IDBTransaction, config: 
       .filter(name => ! store.indexes.some(index => index.name === name))
       .forEach(name => dbStore.deleteIndex(name))
 
-    store.indexes.forEach(({ name, path, unique = false }) => {
+    store.indexes.forEach(({ name, path, unique = false, multiEntry = false }) => {
       const keyPath = path || name
 
       if (dbStore.indexNames.contains(name)) {
         const existing = dbStore.index(name)
 
-        if (existing.keyPath === keyPath && existing.unique === unique) {
+        if (existing.keyPath === keyPath && existing.unique === unique && existing.multiEntry === multiEntry) {
           return
         }
 
         dbStore.deleteIndex(name)
       }
 
-      dbStore.createIndex(name, keyPath, { unique })
+      dbStore.createIndex(name, keyPath, { unique, multiEntry })
     })
   })
 }
@@ -128,6 +129,34 @@ const createDatabaseConnection = (config: WaormDatabaseConfig<IDBDatabase>, idb:
       switch (direction) {
         case 'asc': idbDirection = 'next'; break
         case 'desc': idbDirection = 'prev'; break
+      }
+
+      if (isValueOperator(operator)) {
+        const objectStore = idb.transaction(store, 'readonly').objectStore(store)
+        const path = objectStore.index(index).keyPath as string
+        let skipped = 0
+
+        // Scan the store, the index never holds null / empty values
+        await handleRequest<IDBCursorWithValue>(objectStore.openCursor(undefined, idbDirection), e => {
+          const cursor = e.target.result
+
+          if (! cursor || (limit && items.length >= limit)) {
+            return true
+          }
+
+          if (matchesValue(cursor.value?.[path], operator)) {
+            if (skipped < offset) {
+              skipped++
+            } else {
+              items.push(cursor.value)
+            }
+          }
+
+          cursor.continue()
+          return false
+        })
+
+        return items
       }
 
       switch (operator) {

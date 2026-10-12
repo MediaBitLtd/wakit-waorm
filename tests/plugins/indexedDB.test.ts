@@ -130,6 +130,19 @@ describe('indexedDB plugin', () => {
       expect(users(idb).index('mail').keyPath).toBe('name')
     })
 
+    it('creates and recreates multiEntry indexes', async () => {
+      const idb = await upgrade(uniqueName(), {
+        name: '',
+        stores: [{ name: 'users', indexes: [{ name: 'roles' }] }],
+      })
+
+      expect(users(idb).index('roles').multiEntry).toBe(false)
+
+      const name = uniqueName()
+      const first = await plugin.setup(makeConfig(name))
+      expect(users(first.getEngine()!).index('roles').multiEntry).toBe(true)
+    })
+
     it('keeps data in existing stores', async () => {
       const name = uniqueName()
       await upgrade(name, { name: '', stores: [{ name: 'users', indexes: [{ name: 'name' }] }] })

@@ -1,4 +1,5 @@
 import type { Resource, WaormConnectionPlugin, WaormDatabaseConfig, WaormDatabaseConnection } from '../index'
+import { isValueOperator, matchesValue } from '../operators'
 
 const getByKey = (db: string, store: string, key?: string): Resource|undefined => {
   if (! key) {
@@ -10,15 +11,24 @@ const getByKey = (db: string, store: string, key?: string): Resource|undefined =
   return data ? JSON.parse(data) as Resource : undefined
 }
 
-const rebuildIndex = (db: string, store: string, index: string, field: string, keys: (string | number)[]) => {
+// multiEntry indexes each array element on its own
+const indexValues = (value: any, multiEntry?: boolean): string[] => {
+  if (multiEntry && Array.isArray(value)) {
+    return [...new Set(value.map(v => v?.toString()).filter(Boolean) as string[])]
+  }
+
+  const indexedValue = value?.toString()
+
+  return indexedValue ? [indexedValue] : []
+}
+
+const rebuildIndex = (db: string, store: string, index: string, field: string, keys: (string | number)[], multiEntry?: boolean) => {
   const values: { [k: string]: (string | number)[] } = {}
 
   keys.forEach(key => {
-    const indexedValue = (getByKey(db, store, key.toString()) as any)?.[field]?.toString()
-
-    if (indexedValue) {
+    indexValues((getByKey(db, store, key.toString()) as any)?.[field], multiEntry).forEach(indexedValue => {
       values[indexedValue] = [...(values[indexedValue] ?? []), key]
-    }
+    })
   })
 
   localStorage.setItem(`WAORM:__${db}_${store}_${index}`, JSON.stringify(values))
@@ -81,9 +91,9 @@ const createDB = (config: WaormDatabaseConfig<WindowLocalStorage>): WaormDatabas
         table: `__${config.name}_${store.name}_${index.name}`
       }
 
-      // New index on existing data, or index now points at another field
-      if (keys.length && previous?.key !== field) {
-        rebuildIndex(config.name, store.name, index.name, field, keys)
+      // New index on existing data, or index now points at another field / changed multiEntry
+      if (keys.length && (previous?.key !== field || !! previous?.multiEntry !== !! index.multiEntry)) {
+        rebuildIndex(config.name, store.name, index.name, field, keys, index.multiEntry)
       }
     })
 
@@ -106,7 +116,7 @@ const createDB = (config: WaormDatabaseConfig<WindowLocalStorage>): WaormDatabas
 
       storeConfig.indexes.forEach(index => {
         const indexConfig = indexTable[index.name]
-        const indexedValue = (data as any)[indexConfig.key]?.toString()
+        const indexedValues = indexValues((data as any)[indexConfig.key], index.multiEntry)
 
         const values = JSON.parse(localStorage.getItem(`WAORM:__${config.name}_${store}_${index.name}`) || '{}')
 
@@ -116,16 +126,13 @@ const createDB = (config: WaormDatabaseConfig<WindowLocalStorage>): WaormDatabas
           }
         }
 
-        if (! indexedValue) {
-          localStorage.setItem(`WAORM:__${config.name}_${store}_${index.name}`, JSON.stringify(values))
-          return
-        }
+        indexedValues.forEach(indexedValue => {
+          if (! values[indexedValue]) {
+            values[indexedValue] = []
+          }
 
-        if (! values[indexedValue]) {
-          values[indexedValue] = []
-        }
-
-        values[indexedValue].push(key)
+          values[indexedValue].push(key)
+        })
 
         localStorage.setItem(`WAORM:__${config.name}_${store}_${index.name}`, JSON.stringify(values))
       })
@@ -177,6 +184,35 @@ const createDB = (config: WaormDatabaseConfig<WindowLocalStorage>): WaormDatabas
       const direction = options?.direction || 'asc'
       const items: Resource[] = []
       let i = 0
+
+      if (isValueOperator(operator)) {
+        const indexTable = JSON.parse(localStorage.getItem(`WAORM:__${config.name}_${store}`) || '{}')
+        const field = indexTable[index]?.key
+        const keys = [...(indexTable.__keys ?? [])]
+
+        if (! field) {
+          return items
+        }
+
+        if (direction !== 'asc') {
+          keys.reverse()
+        }
+
+        // Scan the store, the index never holds null / empty values
+        for (const key of keys) {
+          if (limit && items.length >= limit) {
+            break
+          }
+
+          const resource = getByKey(config.name, store, key.toString())
+
+          if (resource && matchesValue((resource as any)[field], operator) && i++ >= offset) {
+            items.push(resource)
+          }
+        }
+
+        return items
+      }
 
       const indexValues = JSON.parse(localStorage.getItem(`WAORM:__${config.name}_${store}_${index}`) || '{}')
       const indexKeys = Object.keys(indexValues).sort()
