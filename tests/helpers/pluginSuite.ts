@@ -5,7 +5,7 @@ export const makeConfig = <T>(name: string): WaormDatabaseConfig<T> => ({
   name,
   version: 1,
   stores: [
-    { name: 'users', indexes: [{ name: 'name' }, { name: 'email' }, { name: 'mail', path: 'email' }] },
+    { name: 'users', indexes: [{ name: 'name' }, { name: 'email' }, { name: 'mail', path: 'email' }, { name: 'roles', multiEntry: true }] },
   ],
 })
 
@@ -131,6 +131,37 @@ export const runPluginSuite = <T>(connect: () => Promise<WaormDatabaseConnection
 
     it('respects offset', async () => {
       expect(names(await conn.where('users', 'name', 'Ali', { operator: 'includes', offset: 1 }))).toEqual(['Alicia'])
+    })
+  })
+
+  describe('multiEntry index', () => {
+    const ids = (result: Resource[] | Resource | undefined) => (result as Resource[]).map(r => r.id).sort()
+
+    beforeEach(async () => {
+      await conn.set('users', 'u1', { id: 'u1', name: 'Alice', email: 'a@t.com', roles: ['admin', 'editor'] } as Resource)
+      await conn.set('users', 'u2', { id: 'u2', name: 'Bob', email: 'b@t.com', roles: ['editor'] } as Resource)
+    })
+
+    it('equals matches any array element', async () => {
+      expect(await conn.where('users', 'roles', 'admin')).toMatchObject({ id: 'u1' })
+    })
+
+    it('equals_many returns every resource containing the element', async () => {
+      expect(ids(await conn.where('users', 'roles', 'editor', { operator: 'equals_many' }))).toEqual(['u1', 'u2'])
+      expect(ids(await conn.where('users', 'roles', 'admin', { operator: 'equals_many' }))).toEqual(['u1'])
+    })
+
+    it('set reindexes removed elements', async () => {
+      await conn.set('users', 'u1', { id: 'u1', name: 'Alice', email: 'a@t.com', roles: ['admin'] } as Resource)
+
+      expect(ids(await conn.where('users', 'roles', 'editor', { operator: 'equals_many' }))).toEqual(['u2'])
+    })
+
+    it('delete removes every element entry', async () => {
+      await conn.delete('users', 'u1')
+
+      expect(await conn.where('users', 'roles', 'admin')).toBeUndefined()
+      expect(ids(await conn.where('users', 'roles', 'editor', { operator: 'equals_many' }))).toEqual(['u2'])
     })
   })
 }

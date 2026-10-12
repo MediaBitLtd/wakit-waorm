@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { initDB } from '../database'
 import { clearDatabases } from '../database'
 import { paramBagSymbol, setDBConnection } from '../model'
-import { UserModel, PostModel, SlugModel } from './helpers/fixtures'
+import { UserModel, PostModel, SlugModel, TagModel } from './helpers/fixtures'
 import memoryPlugin from './helpers/memoryPlugin'
 
 const dbConfig = {
@@ -11,7 +11,8 @@ const dbConfig = {
   plugin: memoryPlugin,
   stores: [
     { name: 'users', indexes: [{ name: 'email' }, { name: 'name' }] },
-    { name: 'posts', indexes: [{ name: 'title' }, { name: 'user_id' }] },
+    { name: 'posts', indexes: [{ name: 'title' }, { name: 'user_id' }, { name: 'tag_ids', multiEntry: true }] },
+    { name: 'tags', indexes: [{ name: 'name' }] },
     { name: 'slugs', indexes: [{ name: 'name' }] },
   ],
 }
@@ -306,6 +307,99 @@ describe('relationships', () => {
 
   it('throws for unknown relationship', () => {
     expect(() => new UserModel().with('nonexistent')).toThrow('No relationship setup')
+  })
+})
+
+describe('belongsMany relationships', () => {
+  const tagNames = (model: any) => model.tags.map((tag: TagModel) => tag.name)
+  const stored = async (key: string) => await new PostModel().get(key)
+
+  beforeEach(async () => {
+    await new TagModel().hydrate({ id: 't1', name: 'js' }).save()
+    await new TagModel().hydrate({ id: 't2', name: 'ts' }).save()
+    await new TagModel().hydrate({ id: 't3', name: 'css' }).save()
+    await new PostModel().hydrate({ id: 'p1', title: 'Post 1', tag_ids: ['t2', 't1'] }).save()
+    await new PostModel().hydrate({ id: 'p2', title: 'Post 2', tag_ids: ['t1'] }).save()
+  })
+
+  it('loads related in key order', async () => {
+    const post = await new PostModel().with('tags').get('p1')
+    expect(tagNames(post)).toEqual(['ts', 'js'])
+    expect(post!.isClean()).toBe(true)
+  })
+
+  it('skips missing related and handles no keys', async () => {
+    await new PostModel().hydrate({ id: 'p3', title: 'Post 3', tag_ids: ['t1', 'nope'] }).save()
+    await new PostModel().hydrate({ id: 'p4', title: 'Post 4' }).save()
+
+    expect(tagNames(await new PostModel().with('tags').get('p3'))).toEqual(['js'])
+    expect(tagNames(await new PostModel().with('tags').get('p4'))).toEqual([])
+  })
+
+  it('loads reverse lookup via many on multiEntry index', async () => {
+    const t1 = await new TagModel().with('posts').get('t1')
+    const t2 = await new TagModel().with('posts').get('t2')
+    const t3 = await new TagModel().with('posts').get('t3')
+
+    expect((t1 as any).posts.map((p: PostModel) => p.id).sort()).toEqual(['p1', 'p2'])
+    expect((t2 as any).posts.map((p: PostModel) => p.id)).toEqual(['p1'])
+    expect((t3 as any).posts).toEqual([])
+  })
+
+  it('attach appends, dedupes and persists', async () => {
+    const post = await new PostModel().get('p2')
+    await post!.attach('tags', 't2')
+    await post!.attach('tags', ['t1', 't3', 't3'])
+
+    expect(post!.tag_ids).toEqual(['t1', 't2', 't3'])
+    expect((await stored('p2'))!.tag_ids).toEqual(['t1', 't2', 't3'])
+    expect(post!.isClean()).toBe(true)
+  })
+
+  it('detach removes and updates reverse lookup', async () => {
+    const post = await new PostModel().get('p1')
+    await post!.detach('tags', 't1')
+
+    expect((await stored('p1'))!.tag_ids).toEqual(['t2'])
+
+    const t1 = await new TagModel().with('posts').get('t1')
+    expect((t1 as any).posts.map((p: PostModel) => p.id)).toEqual(['p2'])
+  })
+
+  it('detach accepts many keys', async () => {
+    const post = await new PostModel().get('p1')
+    await post!.detach('tags', ['t1', 't2'])
+
+    expect((await stored('p1'))!.tag_ids).toEqual([])
+  })
+
+  it('sync replaces keys', async () => {
+    const post = await new PostModel().get('p1')
+    await post!.sync('tags', ['t3', 't1', 't3'])
+
+    expect((await stored('p1'))!.tag_ids).toEqual(['t3', 't1'])
+  })
+
+  it('reloads relation when preloaded', async () => {
+    const post = await new PostModel().with('tags').get('p1')
+    await post!.sync('tags', ['t3'])
+
+    expect(tagNames(post)).toEqual(['css'])
+  })
+
+  it('does not mutate the hydrated source array', async () => {
+    const tagIds = ['t1']
+    const post = new PostModel().hydrate({ id: 'p5', title: 'Post 5', tag_ids: tagIds })
+    await post.attach('tags', 't2')
+
+    expect(tagIds).toEqual(['t1'])
+  })
+
+  it('throws for unknown or non belongsMany relationship', async () => {
+    const post = await new PostModel().get('p1')
+
+    await expect(post!.attach('nonexistent', 't1')).rejects.toThrow('No relationship setup')
+    await expect(post!.attach('author', 't1')).rejects.toThrow('not a belongsMany')
   })
 })
 

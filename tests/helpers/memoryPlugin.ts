@@ -29,13 +29,18 @@ const updateIndexes = (engine: MemoryEngine, config: WaormDatabaseConfig<MemoryE
       }
     }
 
-    // Add new index value
-    const value = (data as any)[fieldPath]?.toString()
-    if (value !== undefined && value !== null) {
-      if (! indexMap.has(value)) {
-        indexMap.set(value, [])
+    // Add new index value(s), multiEntry indexes each array element
+    const raw = (data as any)[fieldPath]
+    const values: unknown[] = index.multiEntry && Array.isArray(raw) ? [...new Set(raw)] : [raw]
+
+    for (const v of values) {
+      const value = v?.toString()
+      if (value !== undefined && value !== null) {
+        if (! indexMap.has(value)) {
+          indexMap.set(value, [])
+        }
+        indexMap.get(value)!.push(key)
       }
-      indexMap.get(value)!.push(key)
     }
   })
 }

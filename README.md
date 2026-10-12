@@ -74,6 +74,57 @@ export default class User extends Model<UserResource> {
 export const user = () => (new User)
 ```
 
+##### Many-to-many (`belongsMany`)
+
+Store the related keys as an array on the owning record and index it with `multiEntry: true`, so each element is indexed on its own:
+
+```typescript
+await initDB({
+  name: 'Blog',
+  version: 1,
+  stores: [
+    { name: 'posts', indexes: [{ name: 'tag_ids', multiEntry: true }] },
+    { name: 'tags', indexes: [] },
+  ],
+})
+
+class Post extends Model {
+  public tag_ids?: string[]
+
+  relationships(): WaormRelationshipBag {
+    return {
+      tags: { related: Tag, relationship: 'belongsMany', foreignKey: 'tag_ids' },
+    }
+  }
+
+  storeName(): string {
+    return 'posts'
+  }
+}
+
+class Tag extends Model {
+  relationships(): WaormRelationshipBag {
+    return {
+      // Reverse lookup is a regular `many` over the multiEntry index
+      posts: { related: Post, relationship: 'many', foreignKey: 'tag_ids' },
+    }
+  }
+
+  storeName(): string {
+    return 'tags'
+  }
+}
+
+const post = await new Post().with('tags').get('p1') // post.tags loaded in tag_ids order
+const tag = await new Tag().with('posts').get('t1')  // every post containing t1
+
+await post.attach('tags', 't2')          // or attach('tags', ['t2', 't3'])
+await post.detach('tags', 't1')          // or detach('tags', ['t1', 't2'])
+await post.sync('tags', ['t1', 't3'])    // replace all keys
+```
+
+`attach`, `detach` and `sync` dedupe the keys, save the model (including any unsaved changes) and reload the relation if it was loaded with `with()`. They only work on `belongsMany` relationships. Changing `multiEntry` on an existing indexedDB index requires a version bump.
+
 ##### Custom Key Fields
 
 By default models use `id` as the primary key. Override `getKeyField()` to use a different field:
@@ -181,7 +232,7 @@ On IndexedDB, the schema is only synced when `version` increases. On localStorag
 When synced:
 
 - Missing stores and indexes are created
-- Indexes no longer in `stores` are removed, and indexes whose `path` or `unique` changed are recreated
+- Indexes no longer in `stores` are removed, and indexes whose `path`, `unique` or `multiEntry` changed are recreated
 - Stores no longer in `stores` are kept, unless `dropUnknownStores: true` is set — **this deletes their data**
 
 #### Version Changes
