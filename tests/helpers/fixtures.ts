@@ -2,7 +2,7 @@ import Model from '../../model'
 import type { WaormRelationshipBag } from '../../index'
 
 export class UserModel extends Model {
-  id?: string
+  declare id?: string
   name?: string
   email?: string
 
@@ -21,7 +21,7 @@ export class UserModel extends Model {
 }
 
 export class PostModel extends Model {
-  id?: string
+  declare id?: string
   title?: string
   user_id?: string
 

@@ -115,15 +115,16 @@ const createDB = (config: WaormDatabaseConfig<WindowLocalStorage>): WaormDatabas
       let i = 0
 
       const indexValues = JSON.parse(localStorage.getItem(`WAORM:__${config.name}_${store}_${index}`) || '{}')
+      const indexKeys = Object.keys(indexValues).sort()
 
       if (direction !== 'asc') {
-        indexValues.reverse()
+        indexKeys.reverse()
       }
 
       switch (operator) {
         case 'equals': return getByKey(config.name, store, indexValues[search] ? indexValues[search][0] : undefined)
         case 'equals_many':
-          for (const k in indexValues) {
+          for (const k of indexKeys) {
             if (i++ < offset) {
               continue
             }
@@ -149,7 +150,7 @@ const createDB = (config: WaormDatabaseConfig<WindowLocalStorage>): WaormDatabas
 
           return items
         case 'not_equals':
-          for (const k in indexValues) {
+          for (const k of indexKeys) {
             if (i++ < offset) {
               continue
             }
@@ -175,7 +176,7 @@ const createDB = (config: WaormDatabaseConfig<WindowLocalStorage>): WaormDatabas
 
           return items
         case 'includes':
-          for (const k in indexValues) {
+          for (const k of indexKeys) {
             if (i++ < offset) {
               continue
             }
@@ -201,7 +202,7 @@ const createDB = (config: WaormDatabaseConfig<WindowLocalStorage>): WaormDatabas
 
           return items
         case 'not_includes':
-          for (const k in indexValues) {
+          for (const k of indexKeys) {
             if (i++ < offset) {
               continue
             }

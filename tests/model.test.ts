@@ -168,7 +168,7 @@ describe('many', () => {
   it('equals_many operator matches exact', async () => {
     const results = await new UserModel().many('name', 'Alice', { operator: 'equals_many' })
     expect(results.length).toBe(1)
-    expect(results[0].name).toBe('Alice')
+    expect(results[0]!.name).toBe('Alice')
   })
 
   it('not_equals operator excludes match', async () => {
@@ -196,7 +196,7 @@ describe('many', () => {
   it('results are hydrated model instances', async () => {
     const results = await new UserModel().many('name', 'Alice', { operator: 'equals_many' })
     expect(results[0]).toBeInstanceOf(UserModel)
-    expect(results[0].isInstance()).toBe(true)
+    expect(results[0]!.isInstance()).toBe(true)
   })
 })
 
@@ -223,8 +223,8 @@ describe('all', () => {
   it('results are hydrated model instances', async () => {
     const results = await new UserModel().all()
     expect(results[0]).toBeInstanceOf(UserModel)
-    expect(results[0].isInstance()).toBe(true)
-    expect(results[0].isNew()).toBe(false)
+    expect(results[0]!.isInstance()).toBe(true)
+    expect(results[0]!.isNew()).toBe(false)
   })
 })
 
