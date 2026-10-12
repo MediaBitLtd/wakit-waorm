@@ -1,6 +1,8 @@
 import 'fake-indexeddb/auto'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import plugin from '../../plugins/indexedDB'
+import { clearEventListeners, onDatabaseBlocked, onDatabaseVersionChange } from '../../events'
+import type { WaormDatabaseConfig } from '../../index'
 import { makeConfig, names, runPluginSuite, seed } from '../helpers/pluginSuite'
 
 const uniqueName = () => 'idb-test-' + Math.random()
@@ -55,13 +57,98 @@ describe('indexedDB plugin', () => {
       await expect(conn.get('nope', 'k')).rejects.toThrow()
     })
 
-    // Known bug: filters read cursor.value[indexName] instead of the index path.
-    // Skipped: the TypeError in onsuccess leaves the request unresolved until handleRequest times out.
-    it.skip('includes works on index with custom path', async () => {
+    it('includes works on index with custom path', async () => {
       const conn = await plugin.setup(makeConfig(uniqueName()))
       await seed(conn)
 
       expect(names(await conn.where('users', 'mail', 'b@', { operator: 'includes' }))).toEqual(['Bob'])
+    })
+  })
+
+  describe('version change', () => {
+    afterEach(() => clearEventListeners())
+
+    it('dispatches blocked and waits for other connections to close', async () => {
+      const name = uniqueName()
+      const blocked = vi.fn()
+      onDatabaseBlocked(blocked)
+
+      const raw = await new Promise<IDBDatabase>(resolve => {
+        const request = indexedDB.open(name, 1)
+        request.onsuccess = () => resolve(request.result)
+      })
+
+      const pending = plugin.setup({ ...makeConfig<IDBDatabase>(name), version: 2 })
+      await vi.waitFor(() => expect(blocked).toHaveBeenCalledWith({ name, oldVersion: 1, newVersion: 2 }))
+
+      raw.close()
+      expect((await pending).getEngine()?.version).toBe(2)
+    })
+
+    it('dispatches version change and closes old connection', async () => {
+      const name = uniqueName()
+      const versionChange = vi.fn()
+      onDatabaseVersionChange(versionChange)
+
+      const first = await plugin.setup(makeConfig(name))
+      await seed(first)
+
+      const second = await plugin.setup({ ...makeConfig<IDBDatabase>(name), version: 2 })
+
+      expect(versionChange).toHaveBeenCalledWith({ name, oldVersion: 1, newVersion: 2 })
+      await expect(first.get('users', 'u1')).rejects.toThrow()
+      expect(await second.get('users', 'u1')).toMatchObject({ name: 'Alice' })
+    })
+  })
+
+  describe('schema sync', () => {
+    const upgrade = async (name: string, config: WaormDatabaseConfig<IDBDatabase>) => {
+      const first = await plugin.setup(makeConfig(name))
+      await seed(first)
+
+      return (await plugin.setup({ ...config, name, version: 2 })).getEngine()!
+    }
+
+    const users = (idb: IDBDatabase) => idb.transaction('users', 'readonly').objectStore('users')
+
+    it('removes indexes not in config', async () => {
+      const idb = await upgrade(uniqueName(), {
+        name: '',
+        stores: [{ name: 'users', indexes: [{ name: 'name' }] }],
+      })
+
+      expect([...users(idb).indexNames]).toEqual(['name'])
+    })
+
+    it('recreates indexes whose definition changed', async () => {
+      const idb = await upgrade(uniqueName(), {
+        name: '',
+        stores: [{ name: 'users', indexes: [{ name: 'name', unique: true }, { name: 'email' }, { name: 'mail', path: 'name' }] }],
+      })
+
+      expect(users(idb).index('name').unique).toBe(true)
+      expect(users(idb).index('mail').keyPath).toBe('name')
+    })
+
+    it('keeps data in existing stores', async () => {
+      const name = uniqueName()
+      await upgrade(name, { name: '', stores: [{ name: 'users', indexes: [{ name: 'name' }] }] })
+      const conn = await plugin.setup({ ...makeConfig<IDBDatabase>(name), version: 3 })
+
+      expect(names(await conn.all('users'))).toEqual(['Alice', 'Bob', 'Charlie', 'Alicia'])
+      expect(await conn.where('users', 'email', 'c@t.com')).toMatchObject({ id: 'u3' })
+    })
+
+    it('keeps unknown stores by default', async () => {
+      const idb = await upgrade(uniqueName(), { name: '', stores: [{ name: 'posts', indexes: [] }] })
+
+      expect([...idb.objectStoreNames].sort()).toEqual(['posts', 'users'])
+    })
+
+    it('drops unknown stores with dropUnknownStores', async () => {
+      const idb = await upgrade(uniqueName(), { name: '', dropUnknownStores: true, stores: [{ name: 'posts', indexes: [] }] })
+
+      expect([...idb.objectStoreNames]).toEqual(['posts'])
     })
   })
 })

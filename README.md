@@ -175,6 +175,28 @@ initDB({
 })
 ```
 
+##### Schema Changes
+
+On IndexedDB, the schema is only synced when `version` increases. On localStorage, it is synced on every `initDB`.
+When synced:
+
+- Missing stores and indexes are created
+- Indexes no longer in `stores` are removed, and indexes whose `path` or `unique` changed are recreated
+- Stores no longer in `stores` are kept, unless `dropUnknownStores: true` is set — **this deletes their data**
+
+#### Version Changes
+
+When a newer `version` is opened (e.g. in another tab), existing connections dispatch a version change event and close
+themselves, so the upgrade isn't blocked. The closed connection can't be used anymore, so reload the app. If another
+connection still holds the database open, a blocked event is dispatched and `initDB` waits until it's released:
+
+```typescript
+import { onDatabaseBlocked, onDatabaseVersionChange } from '@wakit/waorm'
+
+onDatabaseVersionChange(({ name, oldVersion, newVersion }) => location.reload())
+onDatabaseBlocked(({ name, oldVersion, newVersion }) => alert('Please close other tabs'))
+```
+
 #### Error Handling
 
 `initDB` throws on failure after dispatching an event. Wrap in try/catch or listen for errors:

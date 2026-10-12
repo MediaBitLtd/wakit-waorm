@@ -53,6 +53,7 @@ export interface WaormDatabaseConfig<T> {
   plugin?: WaormConnectionPlugin<T>;
   version?: number;
   default?: boolean;
+  dropUnknownStores?: boolean;
   stores: WaormStore[];
 }
 
@@ -88,6 +89,10 @@ export {
   onModelOperationError,
   offDatabaseInitError,
   offModelOperationError,
+  onDatabaseBlocked,
+  offDatabaseBlocked,
+  onDatabaseVersionChange,
+  offDatabaseVersionChange,
   clearEventListeners,
 } from './events'
 

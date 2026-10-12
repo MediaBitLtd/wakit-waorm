@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, beforeEach } from 'vitest'
 import plugin from '../../plugins/localStorage'
+import type { WaormDatabaseConfig } from '../../index'
 import { makeConfig, names, runPluginSuite, seed } from '../helpers/pluginSuite'
 
 describe('localStorage plugin', () => {
@@ -37,6 +38,57 @@ describe('localStorage plugin', () => {
 
       await expect(conn.set('nope', 'k', {})).rejects.toThrow('Invalid store')
       await expect(conn.delete('nope', 'k')).rejects.toThrow('Invalid store')
+    })
+  })
+
+  describe('schema sync', () => {
+    const resync = async (config: WaormDatabaseConfig<WindowLocalStorage>) => {
+      await seed(await plugin.setup(makeConfig('ls-test')))
+
+      return plugin.setup({ ...config, name: 'ls-test' })
+    }
+
+    it('removes indexes not in config', async () => {
+      await resync({ name: '', stores: [{ name: 'users', indexes: [{ name: 'name' }] }] })
+
+      const table = JSON.parse(localStorage.getItem('WAORM:__ls-test_users')!)
+      expect(Object.keys(table).sort()).toEqual(['__keys', 'name'])
+      expect(localStorage.getItem('WAORM:__ls-test_users_email')).toBeNull()
+      expect(localStorage.getItem('WAORM:__ls-test_users_mail')).toBeNull()
+    })
+
+    it('fills new index from existing data', async () => {
+      const conn = await resync({ name: '', stores: [{ name: 'users', indexes: [{ name: 'name' }, { name: 'id' }] }] })
+
+      expect(await conn.where('users', 'id', 'u3')).toMatchObject({ name: 'Charlie' })
+    })
+
+    it('rebuilds index whose path changed', async () => {
+      const conn = await resync({ name: '', stores: [{ name: 'users', indexes: [{ name: 'mail', path: 'name' }] }] })
+
+      expect(await conn.where('users', 'mail', 'Bob')).toMatchObject({ id: 'u2' })
+      expect(await conn.where('users', 'mail', 'b@t.com')).toBeUndefined()
+    })
+
+    it('keeps unknown stores by default', async () => {
+      await resync({ name: '', stores: [{ name: 'posts', indexes: [] }] })
+
+      const back = await plugin.setup(makeConfig('ls-test'))
+      expect(names(await back.all('users'))).toEqual(['Alice', 'Bob', 'Charlie', 'Alicia'])
+    })
+
+    it('drops unknown stores with dropUnknownStores', async () => {
+      await resync({ name: '', dropUnknownStores: true, stores: [{ name: 'posts', indexes: [] }] })
+
+      const leftovers = Object.keys(localStorage).filter(key => key.includes('_users'))
+      expect(leftovers).toEqual([])
+    })
+
+    it('drops stores unknown from an earlier setup', async () => {
+      await resync({ name: '', stores: [{ name: 'posts', indexes: [] }] })
+      await plugin.setup({ name: 'ls-test', dropUnknownStores: true, stores: [{ name: 'posts', indexes: [] }] })
+
+      expect(Object.keys(localStorage).filter(key => key.includes('_users'))).toEqual([])
     })
   })
 })
