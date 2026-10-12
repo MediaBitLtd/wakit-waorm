@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { initDB } from '../database'
 import { clearDatabases } from '../database'
-import { setDBConnection } from '../model'
+import { paramBagSymbol, setDBConnection } from '../model'
 import { UserModel, PostModel, SlugModel } from './helpers/fixtures'
 import memoryPlugin from './helpers/memoryPlugin'
 
@@ -97,6 +97,45 @@ describe('save', () => {
 
     const found = await new UserModel().get('u1')
     expect(found!.name).toBe('Bob')
+  })
+
+  it('only persists fields()', async () => {
+    const user = new UserModel().hydrate({ id: 'u1', name: 'Alice' });
+    (user as any).extra = 'ignored'
+    await user.save()
+
+    const stored = await user.connection()!.get('users', 'u1')
+    expect(stored).not.toHaveProperty('extra')
+  })
+
+  it('marks model clean and not new after save', async () => {
+    const user = new UserModel()
+    user.id = 'u1'
+    user.name = 'Alice'
+    expect(user.isNew()).toBe(true)
+    expect(user.isDirty()).toBe(true)
+
+    await user.save()
+    expect(user.isNew()).toBe(false)
+    expect(user.isClean()).toBe(true)
+
+    user.name = 'Bob'
+    expect(user.isDirty()).toBe(true)
+  })
+
+  it('generated key stays new after save', async () => {
+    const user = await new UserModel().hydrate({ name: 'Alice' }).save()
+    expect(user.isNew()).toBe(true)
+    expect(user.isClean()).toBe(true)
+  })
+
+  it('sets and persists lastUpdated', async () => {
+    const user = await new UserModel().hydrate({ id: 'u1', name: 'Alice' }).save()
+    const lastUpdated = user[paramBagSymbol]?.lastUpdated
+    expect(lastUpdated).toBeDefined()
+
+    const found = await new UserModel().get('u1')
+    expect(found![paramBagSymbol]?.lastUpdated).toBe(lastUpdated)
   })
 })
 
@@ -247,6 +286,22 @@ describe('relationships', () => {
     expect(user).toBeDefined()
     expect((user as any).posts).toBeDefined()
     expect((user as any).posts.length).toBe(2)
+  })
+
+  it('loaded relationships do not make model dirty', async () => {
+    const user = await new UserModel().with('posts').get('u1')
+    expect(user!.isClean()).toBe(true)
+
+    const post = await new PostModel().with('author').get('p1')
+    expect(post!.isClean()).toBe(true)
+  })
+
+  it('save does not persist loaded relationships', async () => {
+    const user = await new UserModel().with('posts').get('u1')
+    await user!.save()
+
+    const stored = await user!.connection()!.get('users', 'u1')
+    expect(stored).not.toHaveProperty('posts')
   })
 
   it('throws for unknown relationship', () => {

@@ -72,11 +72,17 @@ export default abstract class Model <R = ModelResource, E = any> {
 
   // Getters
   isDirty(): boolean {
-    return isDirty(this.resource())
+    const original = this[paramBagSymbol]?.original
+
+    if (! original) {
+      return true
+    }
+
+    return JSON.stringify(this.attributes()) !== original
   }
 
   isClean(): boolean {
-    return ! isDirty(this.resource())
+    return ! this.isDirty()
   }
 
   isNew(): boolean {
@@ -132,12 +138,27 @@ export default abstract class Model <R = ModelResource, E = any> {
     // @ts-ignore
     delete this['$waorm:params']
 
-    this[paramBagSymbol].new = this.getKey()?.toString().startsWith('generated') || ! this.getKey()
+    this[paramBagSymbol].new = this.hasNewKey()
     this[paramBagSymbol].instance = true
-    this[paramBagSymbol].original = JSON.stringify(this)
+    this[paramBagSymbol].original = JSON.stringify(this.attributes())
     this[paramBagSymbol].preloadRelations = preloadedRelationships
 
     return this
+  }
+
+  // Persistable data: fields() only (when defined), without loaded relationships
+  attributes<T = R>(): T {
+    const fields = this.fields()
+    const relationships = this.relationships()
+    const data = JSON.parse(JSON.stringify(this))
+
+    for (const k in data) {
+      if ((fields && ! fields.includes(k)) || Object.hasOwn(relationships, k)) {
+        delete data[k]
+      }
+    }
+
+    return data as T
   }
 
   resource<T = R>(): T {
@@ -178,12 +199,22 @@ export default abstract class Model <R = ModelResource, E = any> {
       key = this.generateKey()
     }
 
+    const lastUpdated = new Date().toISOString()
+    const data = this.resourceToSave<Resource & { '$waorm:params': ModelParamBag }>()
+
+    data['$waorm:params'].lastUpdated = lastUpdated
+
     try {
-      await this.connection()?.set(this.storeName(), this.parseKey(key), this.resourceToSave())
+      await this.connection()?.set(this.storeName(), this.parseKey(key), data)
     } catch (err) {
       dispatch(MODEL_OP_ERROR, err)
       throw err
     }
+
+    this[paramBagSymbol] = this.prepareBag()
+    this[paramBagSymbol].lastUpdated = lastUpdated
+    this[paramBagSymbol].new = this.hasNewKey()
+    this[paramBagSymbol].original = JSON.stringify(this.attributes())
 
     return this
   }
@@ -287,8 +318,14 @@ export default abstract class Model <R = ModelResource, E = any> {
     }
   }
 
+  protected hasNewKey(): boolean {
+    const key = this.getKey()
+
+    return ! key || key.toString().startsWith('generated')
+  }
+
   protected resourceToSave<T = R>(): T {
-    const data = JSON.parse(JSON.stringify(this))
+    const data: any = this.attributes()
 
     data['$waorm:params'] = {
       lastUpdated: this[paramBagSymbol]?.lastUpdated,
