@@ -134,6 +134,46 @@ export const runPluginSuite = <T>(connect: () => Promise<WaormDatabaseConnection
     })
   })
 
+  describe('value operators', () => {
+    const ids = (result: Resource[] | Resource | undefined) => (result as Resource[]).map(r => r.id)
+
+    beforeEach(async () => {
+      await conn.set('users', 'u5', { id: 'u5', name: 'Eve', email: null } as unknown as Resource)
+      await conn.set('users', 'u6', { id: 'u6', name: 'Frank', roles: {} } as unknown as Resource)
+      await conn.set('users', 'u7', { id: 'u7', name: 'Gina', email: '' } as Resource)
+      await conn.set('users', 'u8', { id: 'u8', name: 'Hank', email: 'h@t.com', roles: [] } as Resource)
+      await conn.set('users', 'u9', { id: 'u9', name: 'Ivy', email: 'i@t.com', roles: ['admin'] } as Resource)
+    })
+
+    it('is_null matches null and missing', async () => {
+      expect(ids(await conn.where('users', 'email', '', { operator: 'is_null' }))).toEqual(['u5', 'u6'])
+    })
+
+    it('is_not_null keeps empty string', async () => {
+      expect(ids(await conn.where('users', 'email', '', { operator: 'is_not_null' }))).toEqual(['u1', 'u2', 'u3', 'u4', 'u7', 'u8', 'u9'])
+    })
+
+    it('empty matches null, missing and empty string', async () => {
+      expect(ids(await conn.where('users', 'email', '', { operator: 'empty' }))).toEqual(['u5', 'u6', 'u7'])
+      expect(ids(await conn.where('users', 'email', '', { operator: 'not_empty' }))).toEqual(['u1', 'u2', 'u3', 'u4', 'u8', 'u9'])
+    })
+
+    it('empty matches empty arrays and objects', async () => {
+      expect(ids(await conn.where('users', 'roles', '', { operator: 'empty' }))).toEqual(['u1', 'u2', 'u3', 'u4', 'u5', 'u6', 'u7', 'u8'])
+      expect(ids(await conn.where('users', 'roles', '', { operator: 'not_empty' }))).toEqual(['u9'])
+    })
+
+    it('uses index path', async () => {
+      expect(ids(await conn.where('users', 'mail', '', { operator: 'is_null' }))).toEqual(['u5', 'u6'])
+    })
+
+    it('applies direction, offset and limit to matches', async () => {
+      expect(ids(await conn.where('users', 'email', '', { operator: 'empty', direction: 'desc' }))).toEqual(['u7', 'u6', 'u5'])
+      expect(ids(await conn.where('users', 'email', '', { operator: 'empty', offset: 1 }))).toEqual(['u6', 'u7'])
+      expect(ids(await conn.where('users', 'email', '', { operator: 'empty', offset: 1, limit: 1 }))).toEqual(['u6'])
+    })
+  })
+
   describe('multiEntry index', () => {
     const ids = (result: Resource[] | Resource | undefined) => (result as Resource[]).map(r => r.id).sort()
 

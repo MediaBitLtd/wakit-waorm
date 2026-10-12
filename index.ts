@@ -2,6 +2,10 @@ import { initDB } from './database'
 import { collect } from './collector'
 import Model, { generateNewId, generateNewSlug, isDirty, isNew, isInstance } from './model'
 
+export type WaormValueOperator = 'is_null' | 'is_not_null' | 'empty' | 'not_empty'
+
+export type WaormCursorOperator = 'equals' | 'equals_many' | 'includes' | 'not_equals' | 'not_includes' | WaormValueOperator
+
 export type WaormRelationshipBag = { [k: string]: WaormRelationship }
 
 export type WaormKey = string | number | IDBValidKey;
@@ -70,7 +74,7 @@ export interface WaormCursorOptions {
 }
 
 export interface WaormSearchOptions extends WaormCursorOptions {
-  operator?: 'equals' | 'equals_many' | 'includes' | 'not_equals' | 'not_includes';
+  operator?: WaormCursorOperator;
 }
 
 export interface WaormStore {

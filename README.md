@@ -180,6 +180,35 @@ await user.save()
 console.log(user.id) // 'generated_...'
 ```
 
+##### Operators
+
+`many(field, search, { operator })` searches the index named `field` (its `path` decides which property is checked). `many()` defaults to `includes`; `find(field, search)` always uses `equals`.
+
+| Operator       | Matches                                                  | Cost                 |
+|----------------|----------------------------------------------------------|----------------------|
+| `equals`       | value equal to `search`, first match only                | index lookup         |
+| `equals_many`  | every record whose value equals `search`                 | full index scan      |
+| `not_equals`   | every record whose value differs from `search`           | full index scan      |
+| `includes`     | value contains `search` (substring)                      | full index scan      |
+| `not_includes` | value doesn't contain `search`                           | full index scan      |
+| `is_null`      | `null` or missing                                        | full store scan      |
+| `is_not_null`  | anything but `null` / missing (`''`, `0`, `false`, `[]` included) | full store scan |
+| `empty`        | `null`, missing, `''`, `[]` or `{}`                      | full store scan      |
+| `not_empty`    | anything but empty (`0` and `false` included)            | full store scan      |
+
+- **Index lookup:** jumps straight to the matching entry.
+- **Full index scan:** walks every entry in the index. Records without an indexable value (`null`, missing, `[]` on a multiEntry index) aren't in the index, so `not_equals` / `not_includes` never return them; use `is_null` / `empty` for those. Results are ordered by the indexed value.
+- **Full store scan:** reads every record in the store, ordered by key. `search` is ignored.
+- Comparisons are case-sensitive on indexedDB and case-insensitive on localStorage (except `equals`, exact on both).
+- On a multiEntry index, each array element is matched on its own.
+
+```typescript
+await new User().many('name', 'ali')                                     // includes
+await new User().many('role', 'admin', { operator: 'equals_many' })
+await new User().many('deleted_at', null, { operator: 'is_null' })
+await new Post().many('tag_ids', null, { operator: 'empty' })            // posts without tags
+```
+
 ##### Collecting Results
 
 Use `collect()` to wrap queries with helpers:

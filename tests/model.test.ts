@@ -395,6 +395,17 @@ describe('belongsMany relationships', () => {
     expect(tagIds).toEqual(['t1'])
   })
 
+  it('finds posts without tags via empty operator', async () => {
+    await new PostModel().hydrate({ id: 'p3', title: 'Post 3', tag_ids: [] }).save()
+    await new PostModel().hydrate({ id: 'p4', title: 'Post 4' }).save()
+
+    const untagged = await new PostModel().many('tag_ids', null, { operator: 'empty' })
+    expect(untagged.map(p => p.id).sort()).toEqual(['p3', 'p4'])
+
+    const tagged = await new PostModel().many('tag_ids', null, { operator: 'not_empty' })
+    expect(tagged.map(p => p.id).sort()).toEqual(['p1', 'p2'])
+  })
+
   it('throws for unknown or non belongsMany relationship', async () => {
     const post = await new PostModel().get('p1')
 

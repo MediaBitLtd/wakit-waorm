@@ -1,4 +1,5 @@
 import type { Resource, WaormConnectionPlugin, WaormDatabaseConfig, WaormDatabaseConnection, WaormCursorOptions, WaormSearchOptions } from '../../index'
+import { isValueOperator, matchesValue } from '../../operators'
 
 type Store = Map<string, Resource>
 type IndexMap = Map<string, string[]> // indexValue -> keys[]
@@ -113,6 +114,14 @@ const createDB = (config: WaormDatabaseConfig<MemoryEngine>): WaormDatabaseConne
       }
 
       const storeData = engine.stores.get(store)!
+
+      if (isValueOperator(operator)) {
+        const indexConfig = config.stores.find(s => s.name === store)?.indexes.find(i => i.name === index)
+        const fieldPath = indexConfig?.path || index
+        const items = [...storeData.values()].filter(r => matchesValue((r as any)[fieldPath], operator))
+
+        return applyPagination(items, options)
+      }
 
       switch (operator) {
         case 'equals': {
