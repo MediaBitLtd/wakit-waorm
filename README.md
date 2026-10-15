@@ -264,6 +264,38 @@ When synced:
 - Indexes no longer in `stores` are removed, and indexes whose `path`, `unique` or `multiEntry` changed are recreated
 - Stores no longer in `stores` are kept, unless `dropUnknownStores: true` is set — **this deletes their data**
 
+#### Deletion Tracking
+
+To tell a server about local deletes, enable `trackDeletions` on the database and on each model to track. Deleting a
+tracked model writes a tombstone to the reserved `$waorm:deletions` store, in the same transaction as the delete:
+
+```typescript
+import { initDB, Model, collect, deletions, clearDeletion } from '@wakit/waorm'
+
+await initDB({ name: 'MyDatabase', version: 2, trackDeletions: true, stores: [...] })
+
+class Activity extends Model {
+  storeName() { return 'activities' }
+  trackDeletions() { return true }
+}
+
+await activity.delete()                    // removes the record, writes a tombstone
+await activity.delete({ track: false })    // no tombstone, e.g. applying a delete from the server
+await collect(query).delete()              // every item is tracked too
+
+await deletions('activities')              // [{ store, key, deleted_at, data }], oldest first
+await deletions()                          // every store
+await clearDeletion('activities', key)     // once the server confirmed the delete
+```
+
+- `data` holds the record's attributes at delete time, for servers that need more than the key.
+- Keys starting with `generated_` were never on the server, so no tombstone is written.
+- Saving a record clears its pending tombstone.
+- A tracked model throws if the database doesn't have `trackDeletions` enabled.
+- `deletions()` and `clearDeletion()` use the default connection, pass a connection as the last argument for another one.
+- On IndexedDB, enabling `trackDeletions` on an existing database needs a `version` bump to create the store.
+- Custom plugins must implement `deleteTracked(store, key, tombstone)` and `setTracked(store, key, data)`.
+
 #### Version Changes
 
 When a newer `version` is opened (e.g. in another tab), existing connections dispatch a version change event and close

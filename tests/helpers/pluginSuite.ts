@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { Resource, WaormDatabaseConfig, WaormDatabaseConnection } from '../../index'
+import { DELETIONS_STORE, withDeletionsStore } from '../../deletions'
 
-export const makeConfig = <T>(name: string): WaormDatabaseConfig<T> => ({
+export const makeConfig = <T>(name: string, trackDeletions = false): WaormDatabaseConfig<T> => withDeletionsStore({
   name,
   version: 1,
+  trackDeletions,
   stores: [
     { name: 'users', indexes: [{ name: 'name' }, { name: 'email' }, { name: 'mail', path: 'email' }, { name: 'roles', multiEntry: true }] },
   ],
@@ -171,6 +173,36 @@ export const runPluginSuite = <T>(connect: () => Promise<WaormDatabaseConnection
       expect(ids(await conn.where('users', 'email', '', { operator: 'empty', direction: 'desc' }))).toEqual(['u7', 'u6', 'u5'])
       expect(ids(await conn.where('users', 'email', '', { operator: 'empty', offset: 1 }))).toEqual(['u6', 'u7'])
       expect(ids(await conn.where('users', 'email', '', { operator: 'empty', offset: 1, limit: 1 }))).toEqual(['u6'])
+    })
+  })
+
+  describe('tracked writes', () => {
+    const tombstone = (key: string) => ({ store: 'users', key, deleted_at: '2026-01-01T00:00:00.000Z', data: { id: key } })
+
+    it('deleteTracked removes resource and writes tombstone', async () => {
+      expect(await conn.deleteTracked('users', 'u2', tombstone('u2'))).toBe(true)
+
+      expect(await conn.get('users', 'u2')).toBeUndefined()
+      expect(await conn.where('users', 'name', 'Bob')).toBeUndefined()
+      expect(await conn.get(DELETIONS_STORE, 'users:u2')).toEqual(tombstone('u2'))
+    })
+
+    it('tombstones are indexed by store', async () => {
+      await conn.deleteTracked('users', 'u1', tombstone('u1'))
+      await conn.deleteTracked('users', 'u2', tombstone('u2'))
+
+      const result = await conn.where(DELETIONS_STORE, 'store', 'users', { operator: 'equals_many' }) as unknown as { key: string }[]
+      expect(result.map(r => r.key).sort()).toEqual(['u1', 'u2'])
+    })
+
+    it('setTracked writes resource and removes tombstone', async () => {
+      await conn.deleteTracked('users', 'u2', tombstone('u2'))
+      const data = { id: 'u2', name: 'Bob', email: 'b@t.com' } as Resource
+
+      expect(await conn.setTracked('users', 'u2', data)).toEqual(data)
+      expect(await conn.get('users', 'u2')).toEqual(data)
+      expect(await conn.get(DELETIONS_STORE, 'users:u2')).toBeUndefined()
+      expect(await conn.all(DELETIONS_STORE)).toEqual([])
     })
   })
 

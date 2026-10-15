@@ -2,13 +2,13 @@ import type { WaormQueryCollector } from './index'
 import { Model } from './index'
 
 export const collect = <T = typeof Model>(query: Promise<Model[]>): WaormQueryCollector<T> => ({
-  delete: async () => {
+  delete: async (options) => {
     const items = await query
     let result = true
 
     for (const k in items) {
       if (items[k]) {
-        result = (await items[k].delete()) && result
+        result = (await items[k].delete(options)) && result
       }
     }
 

@@ -59,6 +59,21 @@ export class TagModel extends Model {
   }
 }
 
+export class ActivityModel extends Model {
+  declare id?: string | number
+  title?: string
+
+  storeName() {
+    return 'activities'
+  }
+  fields() {
+    return ['id', 'title']
+  }
+  trackDeletions() {
+    return true
+  }
+}
+
 export class SlugModel extends Model {
   slug?: string
   name?: string

@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { initDB } from '../database'
 import { clearDatabases } from '../database'
 import { paramBagSymbol, setDBConnection } from '../model'
-import { UserModel, PostModel, SlugModel, TagModel } from './helpers/fixtures'
+import { clearDeletion, deletions } from '../deletions'
+import { ActivityModel, UserModel, PostModel, SlugModel, TagModel } from './helpers/fixtures'
 import memoryPlugin from './helpers/memoryPlugin'
 
 const dbConfig = {
@@ -430,6 +431,99 @@ describe('custom key field', () => {
     await model.save()
     expect(model.slug).toBeDefined()
     expect(model.slug!.startsWith('generated_')).toBe(true)
+  })
+})
+
+describe('deletion tracking', () => {
+  const trackedConfig = {
+    ...dbConfig,
+    trackDeletions: true,
+    stores: [...dbConfig.stores, { name: 'activities', indexes: [{ name: 'title' }] }],
+  }
+
+  beforeEach(async () => {
+    clearDatabases()
+    setDBConnection()
+    await initDB({ ...trackedConfig, name: 'model-tracked-' + Math.random() })
+    await new ActivityModel().hydrate({ id: 'a1', title: 'Run' }).save()
+    await new ActivityModel().hydrate({ id: 'a2', title: 'Swim' }).save()
+  })
+
+  it('delete writes a tombstone with the record data', async () => {
+    const activity = await new ActivityModel().get('a1')
+    expect(await activity!.delete()).toBe(true)
+
+    expect(await new ActivityModel().get('a1')).toBeUndefined()
+    expect(await deletions('activities')).toEqual([
+      { store: 'activities', key: 'a1', deleted_at: expect.any(String), data: { id: 'a1', title: 'Run' } },
+    ])
+  })
+
+  it('track: false skips the tombstone', async () => {
+    await (await new ActivityModel().get('a1'))!.delete({ track: false })
+
+    expect(await new ActivityModel().get('a1')).toBeUndefined()
+    expect(await deletions('activities')).toEqual([])
+  })
+
+  it('generated keys skip the tombstone', async () => {
+    const activity = await new ActivityModel().hydrate({ title: 'Local' }).save()
+    await activity.delete()
+
+    expect(await deletions()).toEqual([])
+  })
+
+  it('models without trackDeletions are untouched', async () => {
+    await new UserModel().hydrate({ id: 'u1', name: 'Alice' }).save()
+    await new UserModel().hydrate({ id: 'u1' }).delete()
+
+    expect(await deletions()).toEqual([])
+  })
+
+  it('save clears a pending tombstone', async () => {
+    await new ActivityModel().hydrate({ id: 'a1' }).delete()
+    await new ActivityModel().hydrate({ id: 'a1', title: 'Run again' }).save()
+
+    expect(await deletions()).toEqual([])
+    expect((await new ActivityModel().get('a1'))!.title).toBe('Run again')
+  })
+
+  it('deletions filters by store and sorts by deleted_at', async () => {
+    await new ActivityModel().hydrate({ id: 'a2' }).delete()
+    await new Promise(resolve => setTimeout(resolve, 2))
+    await new ActivityModel().hydrate({ id: 'a1' }).delete()
+
+    expect((await deletions('activities')).map(d => d.key)).toEqual(['a2', 'a1'])
+    expect(await deletions('users')).toEqual([])
+  })
+
+  it('clearDeletion removes the tombstone and normalizes the key', async () => {
+    await new ActivityModel().hydrate({ id: 5, title: 'Numeric' }).save()
+    await new ActivityModel().hydrate({ id: 5 }).delete()
+    await new ActivityModel().hydrate({ id: 'a1' }).delete()
+
+    expect(await clearDeletion('activities', '5')).toBe(true)
+    expect((await deletions('activities')).map(d => d.key)).toEqual(['a1'])
+  })
+
+  it('accepts an explicit connection', async () => {
+    const other = await initDB({ ...trackedConfig, name: 'model-tracked-other', default: false })
+    await other.deleteTracked('activities', 'x1', { store: 'activities', key: 'x1', deleted_at: new Date().toISOString(), data: {} })
+
+    expect((await deletions('activities', other)).map(d => d.key)).toEqual(['x1'])
+    expect(await deletions('activities')).toEqual([])
+    await clearDeletion('activities', 'x1', other)
+    expect(await deletions('activities', other)).toEqual([])
+  })
+
+  it('throws when the database does not track deletions', async () => {
+    clearDatabases()
+    setDBConnection()
+    await initDB({ ...dbConfig, stores: trackedConfig.stores, name: 'model-untracked-' + Math.random() })
+
+    await expect(new ActivityModel().hydrate({ id: 'a1' }).save()).rejects.toThrow('trackDeletions is not enabled')
+    await expect(new ActivityModel().hydrate({ id: 'a1' }).delete()).rejects.toThrow('trackDeletions is not enabled')
+    await expect(deletions()).rejects.toThrow('trackDeletions is not enabled')
   })
 })
 

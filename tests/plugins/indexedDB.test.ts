@@ -3,12 +3,13 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import plugin from '../../plugins/indexedDB'
 import { clearEventListeners, onDatabaseBlocked, onDatabaseVersionChange } from '../../events'
 import type { WaormDatabaseConfig } from '../../index'
+import { DELETIONS_STORE } from '../../deletions'
 import { makeConfig, names, runPluginSuite, seed } from '../helpers/pluginSuite'
 
 const uniqueName = () => 'idb-test-' + Math.random()
 
 describe('indexedDB plugin', () => {
-  describe('connection', () => runPluginSuite(() => plugin.setup(makeConfig(uniqueName()))))
+  describe('connection', () => runPluginSuite(() => plugin.setup(makeConfig(uniqueName(), true))))
 
   describe('storage', () => {
     it('exposes the IDBDatabase as engine', async () => {
@@ -162,6 +163,12 @@ describe('indexedDB plugin', () => {
       const idb = await upgrade(uniqueName(), { name: '', dropUnknownStores: true, stores: [{ name: 'posts', indexes: [] }] })
 
       expect([...idb.objectStoreNames]).toEqual(['posts'])
+    })
+
+    it('keeps the deletions store with dropUnknownStores', async () => {
+      const idb = await upgrade(uniqueName(), { ...makeConfig<IDBDatabase>('', true), dropUnknownStores: true })
+
+      expect([...idb.objectStoreNames].sort()).toEqual([DELETIONS_STORE, 'users'])
     })
   })
 })

@@ -1,5 +1,6 @@
 import { initDB } from './database'
 import { collect } from './collector'
+import { deletions, clearDeletion, DELETIONS_STORE } from './deletions'
 import Model, { generateNewId, generateNewSlug, isDirty, isNew, isInstance } from './model'
 
 export type WaormValueOperator = 'is_null' | 'is_not_null' | 'empty' | 'not_empty'
@@ -21,7 +22,6 @@ export interface ModelParamBag<T = any> {
   new?: boolean;
   instance?: boolean;
   original?: any;
-  markForDeletion?: boolean;
   preloadRelations?: WaormRelationshipBag | undefined;
 
   lastUpdated: WaormDate | undefined;
@@ -42,10 +42,25 @@ export interface WaormDatabaseConnection<T> {
   all: (store: string, index?: string, options?: WaormCursorOptions) => Promise<Resource[]|Resource|undefined>;
   delete: (store: string, key: WaormKey) => Promise<boolean>;
   where: (store: string, index: string, search: string, options?: WaormSearchOptions) => Promise<Resource[]|Resource|undefined>;
+  // Delete the record and write its tombstone together
+  deleteTracked: (store: string, key: WaormKey, tombstone: WaormDeletion) => Promise<boolean>;
+  // Write the record and remove its tombstone together
+  setTracked: (store: string, key: WaormKey, data: Resource) => Promise<Resource>;
+}
+
+export interface WaormDeletion<T = unknown> {
+  store: string;
+  key: WaormKey;
+  deleted_at: string;
+  data: T;
+}
+
+export interface WaormDeleteOptions {
+  track?: boolean;
 }
 
 export interface WaormQueryCollector<T = typeof Model> {
-  delete: () => Promise<boolean>;
+  delete: (options?: WaormDeleteOptions) => Promise<boolean>;
   each: (callback: (model: T) => Promise<any>) => Promise<void>;
   items: () => Promise<T[]>;
   itemsAsResource: <R>() => Promise<R[]>;
@@ -58,6 +73,7 @@ export interface WaormDatabaseConfig<T> {
   version?: number;
   default?: boolean;
   dropUnknownStores?: boolean;
+  trackDeletions?: boolean;
   stores: WaormStore[];
 }
 
@@ -105,6 +121,9 @@ export {
   Model,
   initDB,
   collect,
+  deletions,
+  clearDeletion,
+  DELETIONS_STORE,
   generateNewId,
   generateNewSlug,
   isDirty,

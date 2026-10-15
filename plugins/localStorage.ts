@@ -1,5 +1,6 @@
 import type { Resource, WaormConnectionPlugin, WaormDatabaseConfig, WaormDatabaseConnection } from '../index'
 import { isValueOperator, matchesValue } from '../operators'
+import { DELETIONS_STORE, tombstoneKey } from '../deletions'
 
 const getByKey = (db: string, store: string, key?: string): Resource|undefined => {
   if (! key) {
@@ -102,80 +103,96 @@ const createDB = (config: WaormDatabaseConfig<WindowLocalStorage>): WaormDatabas
     localStorage.setItem(`WAORM:__${config.name}_${store.name}`, JSON.stringify(indexTable))
   })
 
+  const set: WaormDatabaseConnection<WindowLocalStorage>['set'] = async (store, key, data) => {
+    const storeConfig = config.stores.find(s => s.name === store)
+    if (! storeConfig) {
+      throw new Error('Invalid store')
+    }
+
+    const indexTable = JSON.parse(localStorage.getItem(`WAORM:__${config.name}_${store}`) || '{}')
+
+    storeConfig.indexes.forEach(index => {
+      const indexConfig = indexTable[index.name]
+      const indexedValues = indexValues((data as any)[indexConfig.key], index.multiEntry)
+
+      const values = JSON.parse(localStorage.getItem(`WAORM:__${config.name}_${store}_${index.name}`) || '{}')
+
+      for (const k in values) {
+        if (values[k] && values[k].includes(key)) {
+          values[k].splice(values[k].indexOf(key), 1)
+        }
+      }
+
+      indexedValues.forEach(indexedValue => {
+        if (! values[indexedValue]) {
+          values[indexedValue] = []
+        }
+
+        values[indexedValue].push(key)
+      })
+
+      localStorage.setItem(`WAORM:__${config.name}_${store}_${index.name}`, JSON.stringify(values))
+    })
+
+    if (! indexTable.__keys.includes(key)) {
+      indexTable.__keys.push(key)
+      indexTable.__keys.sort()
+      localStorage.setItem(`WAORM:__${config.name}_${store}`, JSON.stringify(indexTable))
+    }
+
+    localStorage.setItem(`WAORM:${config.name}_${store}:${key.toString()}`, JSON.stringify(data))
+
+    return data
+  }
+
+  const remove: WaormDatabaseConnection<WindowLocalStorage>['delete'] = async (store, key) => {
+    const storeConfig = config.stores.find(s => s.name === store)
+    if (! storeConfig) {
+      throw new Error('Invalid store')
+    }
+
+    const indexTable = JSON.parse(localStorage.getItem(`WAORM:__${config.name}_${store}`) || '{}')
+
+    storeConfig.indexes.forEach(index => {
+      const values = JSON.parse(localStorage.getItem(`WAORM:__${ config.name }_${ store }_${ index.name }`) || '{}')
+
+      for (const k in values) {
+        if (values[k] && values[k].includes(key)) {
+          values[k].splice(values[k].indexOf(key), 1)
+        }
+      }
+
+      localStorage.setItem(`WAORM:__${ config.name }_${ store }_${ index.name }`, JSON.stringify(values))
+    })
+
+    if (indexTable.__keys.includes(key)) {
+      indexTable.__keys.splice(indexTable.__keys.indexOf(key), 1)
+      indexTable.__keys.sort()
+      localStorage.setItem(`WAORM:__${config.name}_${store}`, JSON.stringify(indexTable))
+    }
+
+    localStorage.removeItem(`WAORM:${config.name}_${store}:${key.toString()}`)
+
+    return true
+  }
+
   return {
     name: config.name,
     config,
     get: async (store, key) => getByKey(config.name, store, key.toString()),
-    set: async (store, key, data) => {
-      const storeConfig = config.stores.find(s => s.name === store)
-      if (! storeConfig) {
-        throw new Error('Invalid store')
-      }
+    set,
+    delete: remove,
+    // Tombstone first, a failed record delete then leaves it for save() to clear
+    deleteTracked: async (store, key, tombstone) => {
+      await set(DELETIONS_STORE, tombstoneKey(store, key), tombstone as unknown as Resource)
 
-      const indexTable = JSON.parse(localStorage.getItem(`WAORM:__${config.name}_${store}`) || '{}')
-
-      storeConfig.indexes.forEach(index => {
-        const indexConfig = indexTable[index.name]
-        const indexedValues = indexValues((data as any)[indexConfig.key], index.multiEntry)
-
-        const values = JSON.parse(localStorage.getItem(`WAORM:__${config.name}_${store}_${index.name}`) || '{}')
-
-        for (const k in values) {
-          if (values[k] && values[k].includes(key)) {
-            values[k].splice(values[k].indexOf(key), 1)
-          }
-        }
-
-        indexedValues.forEach(indexedValue => {
-          if (! values[indexedValue]) {
-            values[indexedValue] = []
-          }
-
-          values[indexedValue].push(key)
-        })
-
-        localStorage.setItem(`WAORM:__${config.name}_${store}_${index.name}`, JSON.stringify(values))
-      })
-
-      if (! indexTable.__keys.includes(key)) {
-        indexTable.__keys.push(key)
-        indexTable.__keys.sort()
-        localStorage.setItem(`WAORM:__${config.name}_${store}`, JSON.stringify(indexTable))
-      }
-
-      localStorage.setItem(`WAORM:${config.name}_${store}:${key.toString()}`, JSON.stringify(data))
+      return remove(store, key)
+    },
+    setTracked: async (store, key, data) => {
+      await set(store, key, data)
+      await remove(DELETIONS_STORE, tombstoneKey(store, key))
 
       return data
-    },
-    delete: async (store, key) => {
-      const storeConfig = config.stores.find(s => s.name === store)
-      if (! storeConfig) {
-        throw new Error('Invalid store')
-      }
-
-      const indexTable = JSON.parse(localStorage.getItem(`WAORM:__${config.name}_${store}`) || '{}')
-
-      storeConfig.indexes.forEach(index => {
-        const values = JSON.parse(localStorage.getItem(`WAORM:__${ config.name }_${ store }_${ index.name }`) || '{}')
-
-        for (const k in values) {
-          if (values[k] && values[k].includes(key)) {
-            values[k].splice(values[k].indexOf(key), 1)
-          }
-        }
-
-        localStorage.setItem(`WAORM:__${ config.name }_${ store }_${ index.name }`, JSON.stringify(values))
-      })
-
-      if (indexTable.__keys.includes(key)) {
-        indexTable.__keys.splice(indexTable.__keys.indexOf(key), 1)
-        indexTable.__keys.sort()
-        localStorage.setItem(`WAORM:__${config.name}_${store}`, JSON.stringify(indexTable))
-      }
-
-      localStorage.removeItem(`WAORM:${config.name}_${store}:${key.toString()}`)
-
-      return true
     },
     where:  async (store, index, search, options) => {
       const limit = options?.limit

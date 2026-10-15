@@ -6,6 +6,7 @@ import type {
 } from '../index'
 import { DB_BLOCKED, DB_VERSION_CHANGE, dispatch } from '../events'
 import { isValueOperator, matchesValue } from '../operators'
+import { DELETIONS_STORE, tombstoneKey } from '../deletions'
 
 interface CursorRequestEventTarget extends EventTarget{
   result: IDBCursorWithValue
@@ -114,6 +115,33 @@ const createDatabaseConnection = (config: WaormDatabaseConfig<IDBDatabase>, idb:
       }
 
       return true
+    },
+    deleteTracked: async (store, key, tombstone) => {
+      // One transaction, a failed request aborts both
+      const transaction = idb.transaction([store, DELETIONS_STORE], 'readwrite')
+
+      try {
+        transaction.objectStore(store).delete(key)
+
+        await handleRequest<IDBValidKey>(transaction
+          .objectStore(DELETIONS_STORE)
+          .put(tombstone, tombstoneKey(store, key)))
+      } catch (err) {
+        return false
+      }
+
+      return true
+    },
+    setTracked: async (store, key, data) => {
+      const transaction = idb.transaction([store, DELETIONS_STORE], 'readwrite')
+
+      transaction.objectStore(store).put(data, key)
+
+      await handleRequest<undefined>(transaction
+        .objectStore(DELETIONS_STORE)
+        .delete(tombstoneKey(store, key)))
+
+      return data
     },
     where: async (store, index, search, options) => {
       const limit = options?.limit

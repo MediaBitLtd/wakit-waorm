@@ -3,7 +3,8 @@ import { initDB } from '../database'
 import { clearDatabases } from '../database'
 import { setDBConnection } from '../model'
 import { collect } from '../collector'
-import { UserModel } from './helpers/fixtures'
+import { deletions } from '../deletions'
+import { ActivityModel, UserModel } from './helpers/fixtures'
 import memoryPlugin from './helpers/memoryPlugin'
 
 beforeEach(async () => {
@@ -44,6 +45,35 @@ describe('collector', () => {
 
     const remaining = await new UserModel().all()
     expect(remaining.length).toBe(0)
+  })
+
+  describe('deletion tracking', () => {
+    beforeEach(async () => {
+      clearDatabases()
+      setDBConnection()
+      await initDB({
+        name: 'collector-tracked-' + Math.random(),
+        plugin: memoryPlugin,
+        trackDeletions: true,
+        stores: [{ name: 'activities', indexes: [{ name: 'title' }] }],
+      })
+
+      await new ActivityModel().hydrate({ id: 'a1', title: 'Run' }).save()
+      await new ActivityModel().hydrate({ id: 'a2', title: 'Swim' }).save()
+    })
+
+    it('delete tracks every item', async () => {
+      await collect(new ActivityModel().all()).delete()
+
+      expect((await deletions('activities')).map(d => d.key).sort()).toEqual(['a1', 'a2'])
+    })
+
+    it('delete forwards track: false', async () => {
+      await collect(new ActivityModel().all()).delete({ track: false })
+
+      expect(await new ActivityModel().all()).toEqual([])
+      expect(await deletions('activities')).toEqual([])
+    })
   })
 
   it('itemsAsResource returns plain objects', async () => {

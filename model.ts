@@ -7,6 +7,7 @@ import type {
   WaormDatabaseConnection,
   WaormCursorOptions,
   WaormSearchOptions,
+  WaormDeleteOptions,
 } from './index'
 import { dispatch, MODEL_OP_ERROR } from './events'
 
@@ -19,6 +20,33 @@ interface ModelResource extends Resource {
 let connection: WaormDatabaseConnection<any>|undefined
 
 export const setDBConnection = <T>(databaseConnection?: WaormDatabaseConnection<T>) => connection = databaseConnection
+
+export const getDBConnection = () => connection
+
+export const assertTracking = <T>(databaseConnection?: WaormDatabaseConnection<T>): WaormDatabaseConnection<T> => {
+  if (! databaseConnection?.config.trackDeletions) {
+    throw new Error('trackDeletions is not enabled on the database')
+  }
+
+  return databaseConnection
+}
+
+export const parseKey = (key: Resource['id']|undefined): number|string => {
+  if (! key) {
+    return ''
+  }
+
+  if (key.toString().trim() === '') {
+    return key.toString().trim()
+  }
+
+  // @ts-ignore
+  if (isNaN(key)) {
+    return key.toString()
+  }
+
+  return parseInt(key.toString())
+}
 
 export const generateNewId = (): string => 'generated_' + (Math.random() + 1).toString(36).substring(2)
 
@@ -55,6 +83,10 @@ export default abstract class Model <R = ModelResource, E = any> {
 
   fields(): string[] | undefined {
     return undefined
+  }
+
+  trackDeletions(): boolean {
+    return false
   }
 
   getKeyField(): string {
@@ -205,7 +237,11 @@ export default abstract class Model <R = ModelResource, E = any> {
     data['$waorm:params'].lastUpdated = lastUpdated
 
     try {
-      await this.connection()?.set(this.storeName(), this.parseKey(key), data)
+      if (this.trackDeletions()) {
+        await assertTracking(this.connection()).setTracked(this.storeName(), this.parseKey(key), data)
+      } else {
+        await this.connection()?.set(this.storeName(), this.parseKey(key), data)
+      }
     } catch (err) {
       dispatch(MODEL_OP_ERROR, err)
       throw err
@@ -219,7 +255,7 @@ export default abstract class Model <R = ModelResource, E = any> {
     return this
   }
 
-  async delete(): Promise<boolean> {
+  async delete(options?: WaormDeleteOptions): Promise<boolean> {
     const key = this.getKey()
 
     if (! key) {
@@ -227,6 +263,16 @@ export default abstract class Model <R = ModelResource, E = any> {
     }
 
     try {
+      // Generated keys were never on the server, nothing to tell it
+      if (this.trackDeletions() && options?.track !== false && ! key.toString().startsWith('generated_')) {
+        return await assertTracking(this.connection()).deleteTracked(this.storeName(), this.parseKey(key), {
+          store: this.storeName(),
+          key: this.parseKey(key),
+          deleted_at: new Date().toISOString(),
+          data: this.attributes(),
+        })
+      }
+
       return await this.connection()?.delete(this.storeName(), this.parseKey(key)) || false
     } catch (err) {
       dispatch(MODEL_OP_ERROR, err)
@@ -447,19 +493,6 @@ export default abstract class Model <R = ModelResource, E = any> {
   }
 
   protected parseKey(key: Resource['id']|undefined): number|string {
-    if (! key) {
-      return ''
-    }
-
-    if (key.toString().trim() === '') {
-      return key.toString().trim()
-    }
-
-    // @ts-ignore
-    if (isNaN(key)) {
-      return key.toString()
-    }
-
-    return parseInt(key.toString())
+    return parseKey(key)
   }
 }

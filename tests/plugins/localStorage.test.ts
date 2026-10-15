@@ -7,7 +7,7 @@ import { makeConfig, names, runPluginSuite, seed } from '../helpers/pluginSuite'
 describe('localStorage plugin', () => {
   beforeEach(() => localStorage.clear())
 
-  describe('connection', () => runPluginSuite(() => plugin.setup(makeConfig('ls-test'))))
+  describe('connection', () => runPluginSuite(() => plugin.setup(makeConfig('ls-test', true))))
 
   describe('storage', () => {
     it('setup creates index table per store', async () => {
