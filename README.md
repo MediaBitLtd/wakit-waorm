@@ -125,6 +125,19 @@ await post.sync('tags', ['t1', 't3'])    // replace all keys
 
 `attach`, `detach` and `sync` dedupe the keys, save the model (including any unsaved changes) and reload the relation if it was loaded with `with()`. They only work on `belongsMany` relationships. Changing `multiEntry` on an existing indexedDB index requires a version bump.
 
+##### Nested Relationships
+
+Use dot notation to load relationships of related models, at any depth:
+
+```typescript
+const post = await new Post().with('tags.posts').get('p1')        // post.tags[n].posts
+const user = await new User().with('posts.tags').with('posts.author').all()
+```
+
+- Chained `with()` calls on the same relationship are merged.
+- An unknown relationship anywhere in the path throws at `with()`.
+- Each related record is loaded with its own query, so deep paths over many records can be slow.
+
 ##### Custom Key Fields
 
 By default models use `id` as the primary key. Override `getKeyField()` to use a different field:

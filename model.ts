@@ -135,13 +135,20 @@ export default abstract class Model <R = ModelResource, E = any> {
     return key
   }
 
-  with(relationship: string): this {
+  with(path: string): this {
+    const [relationship = '', ...segments] = path.split('.')
+    const nested = segments.join('.')
     const relation: WaormRelationship | undefined = this.relationships()[relationship]
 
     if (! relation) {
       throw new Error(`No relationship setup for this model with the key: ${relationship}`)
     }
 
+    if (nested) {
+      // Throws now for an invalid nested segment
+      // @ts-ignore
+      (new relation.related).with(nested)
+    }
 
     this[paramBagSymbol] = this.prepareBag()
 
@@ -150,6 +157,13 @@ export default abstract class Model <R = ModelResource, E = any> {
     }
 
     this[paramBagSymbol].preloadRelations[relationship] = relation
+
+    if (nested) {
+      const nestedRelations = this[paramBagSymbol].nestedRelations ?? {}
+
+      nestedRelations[relationship] = [...new Set([...(nestedRelations[relationship] ?? []), nested])]
+      this[paramBagSymbol].nestedRelations = nestedRelations
+    }
 
     return this
   }
@@ -354,6 +368,8 @@ export default abstract class Model <R = ModelResource, E = any> {
           const model = this.newInstance().hydrate(resources[k])
           // @ts-ignore // we will always have it preloaded
           model[paramBagSymbol].preloadRelations = this[paramBagSymbol]?.preloadRelations
+          // @ts-ignore
+          model[paramBagSymbol].nestedRelations = this[paramBagSymbol]?.nestedRelations
           items.push(await model.loadRelationships())
         }
       }
@@ -383,6 +399,8 @@ export default abstract class Model <R = ModelResource, E = any> {
           const model = this.newInstance().hydrate(resources[k])
           // @ts-ignore // we will always have it preloaded
           model[paramBagSymbol].preloadRelations = this[paramBagSymbol]?.preloadRelations
+          // @ts-ignore
+          model[paramBagSymbol].nestedRelations = this[paramBagSymbol]?.nestedRelations
           items.push(await model.loadRelationships())
         }
       }
@@ -434,9 +452,19 @@ export default abstract class Model <R = ModelResource, E = any> {
     return this
   }
 
-  protected async loadRelationship(relationship: string, relation: WaormRelationship): Promise<void> {
+  protected relatedInstance(relationship: string, relation: WaormRelationship): Model {
     // @ts-ignore
-    const model = (new relation.related)
+    const model: Model = (new relation.related)
+
+    for (const path of this[paramBagSymbol]?.nestedRelations?.[relationship] ?? []) {
+      model.with(path)
+    }
+
+    return model
+  }
+
+  protected async loadRelationship(relationship: string, relation: WaormRelationship): Promise<void> {
+    const model = this.relatedInstance(relationship, relation)
 
     switch (relation.relationship) {
       case 'belongs':
@@ -456,8 +484,7 @@ export default abstract class Model <R = ModelResource, E = any> {
 
         for (const key of this.relatedKeys(relation)) {
           // Fresh instance per key, get() hydrates in place
-          // @ts-ignore
-          const item = await (new relation.related).get(this.parseKey(key))
+          const item = await this.relatedInstance(relationship, relation).get(this.parseKey(key))
 
           if (item) {
             items.push(item)

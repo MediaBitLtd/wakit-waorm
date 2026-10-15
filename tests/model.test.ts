@@ -415,6 +415,93 @@ describe('belongsMany relationships', () => {
   })
 })
 
+describe('nested relationships', () => {
+  const ids = (models: any[]) => models.map(model => model.id).sort()
+  const byId = (models: any[], id: string) => models.find(model => model.id === id)
+  const tagNames = (post: any) => post.tags.map((tag: TagModel) => tag.name)
+
+  beforeEach(async () => {
+    await new UserModel().hydrate({ id: 'u1', name: 'Alice', email: 'a@t.com' }).save()
+    await new UserModel().hydrate({ id: 'u2', name: 'Bob', email: 'b@t.com' }).save()
+    await new TagModel().hydrate({ id: 't1', name: 'js' }).save()
+    await new TagModel().hydrate({ id: 't2', name: 'ts' }).save()
+    await new PostModel().hydrate({ id: 'p1', title: 'Post 1', user_id: 'u1', tag_ids: ['t2', 't1'] }).save()
+    await new PostModel().hydrate({ id: 'p2', title: 'Post 2', user_id: 'u1', tag_ids: ['t1'] }).save()
+    await new PostModel().hydrate({ id: 'p3', title: 'Post 3', user_id: 'u2' }).save()
+  })
+
+  it('loads many then belongsMany', async () => {
+    const user: any = await new UserModel().with('posts.tags').get('u1')
+
+    expect(ids(user.posts)).toEqual(['p1', 'p2'])
+    expect(tagNames(byId(user.posts, 'p1'))).toEqual(['ts', 'js'])
+    expect(tagNames(byId(user.posts, 'p2'))).toEqual(['js'])
+  })
+
+  it('loads belongs then many', async () => {
+    const post: any = await new PostModel().with('author.posts').get('p1')
+
+    expect(post.author.name).toBe('Alice')
+    expect(ids(post.author.posts)).toEqual(['p1', 'p2'])
+  })
+
+  it('loads belongsMany then many', async () => {
+    const post: any = await new PostModel().with('tags.posts').get('p1')
+
+    expect(ids(post.tags[0].posts)).toEqual(['p1'])
+    expect(ids(post.tags[1].posts)).toEqual(['p1', 'p2'])
+  })
+
+  it('loads three levels deep', async () => {
+    const user: any = await new UserModel().with('posts.author.posts').get('u1')
+
+    expect(byId(user.posts, 'p1').author.name).toBe('Alice')
+    expect(ids(byId(user.posts, 'p1').author.posts)).toEqual(['p1', 'p2'])
+  })
+
+  it('loads nested paths for all and many', async () => {
+    const users: any[] = await new UserModel().with('posts.tags').all()
+
+    expect(tagNames(byId(byId(users, 'u1').posts, 'p1'))).toEqual(['ts', 'js'])
+    expect(byId(byId(users, 'u2').posts, 'p3').tags).toEqual([])
+
+    const posts: any[] = await new PostModel().with('author.posts').many('title', 'Post')
+
+    expect(ids(byId(posts, 'p3').author.posts)).toEqual(['p3'])
+  })
+
+  it('merges chained paths without duplicates', async () => {
+    const user: any = new UserModel().with('posts').with('posts.tags').with('posts.tags').with('posts.author')
+
+    expect(user[paramBagSymbol].nestedRelations).toEqual({ posts: ['tags', 'author'] })
+
+    await user.get('u1')
+    expect(tagNames(byId(user.posts, 'p1'))).toEqual(['ts', 'js'])
+    expect(byId(user.posts, 'p1').author.name).toBe('Alice')
+  })
+
+  it('throws at with() for an unknown nested relationship', () => {
+    expect(() => new UserModel().with('posts.nope')).toThrow('No relationship setup')
+    expect(() => new UserModel().with('posts.tags.nope')).toThrow('No relationship setup')
+  })
+
+  it('nested relationships are not persisted and keep the model clean', async () => {
+    const user = await new UserModel().with('posts.tags').get('u1')
+    expect(user!.isClean()).toBe(true)
+
+    await user!.save()
+    expect(await user!.connection()!.get('users', 'u1')).not.toHaveProperty('posts')
+  })
+
+  it('attach reloads nested relationships', async () => {
+    const post: any = await new PostModel().with('tags.posts').get('p2')
+    await post.attach('tags', 't2')
+
+    expect(tagNames(post)).toEqual(['js', 'ts'])
+    expect(ids(post.tags[1].posts)).toEqual(['p1', 'p2'])
+  })
+})
+
 describe('custom key field', () => {
   it('uses slug as key', async () => {
     const model = new SlugModel().hydrate({ slug: 'my-slug', name: 'Test' })

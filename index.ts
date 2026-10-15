@@ -23,6 +23,7 @@ export interface ModelParamBag<T = any> {
   instance?: boolean;
   original?: any;
   preloadRelations?: WaormRelationshipBag | undefined;
+  nestedRelations?: { [k: string]: string[] } | undefined;
 
   lastUpdated: WaormDate | undefined;
   lastSynced: WaormDate | undefined;
