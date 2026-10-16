@@ -276,7 +276,7 @@ export default abstract class Model <R = ModelResource, E = any> {
       key = this.generateKey()
     }
 
-    const lastUpdated = new Date().toISOString()
+    const lastUpdated = this.isDirty() ? new Date().toISOString() : this[paramBagSymbol]?.lastUpdated
     const data = this.resourceToSave<Resource & { '$waorm:params': ModelParamBag }>()
 
     data['$waorm:params'].lastUpdated = lastUpdated
@@ -349,7 +349,12 @@ export default abstract class Model <R = ModelResource, E = any> {
       syncErrors: bag.syncErrors,
     }
 
-    await this.hydrate(data).save()
+    this.hydrate(data)
+
+    // hydrate() leaves it clean, but replacing is a change
+    this[paramBagSymbol]!.original = undefined
+
+    await this.save()
 
     // New record first, the old one is only removed once it's stored
     if (oldKey && this.parseKey(oldKey) !== this.parseKey(this.getKey())) {

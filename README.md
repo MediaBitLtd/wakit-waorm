@@ -196,6 +196,8 @@ user.lastSynced()   // { synced_at: Date, errors: [...] }, or undefined if never
 
 `setSynced()` only changes the model in memory, call `save()` to persist it. It doesn't make the model dirty.
 
+`save()` only updates `lastUpdated` when the model is dirty..
+
 ##### Replacing
 
 Replace a hydrated model's record with new data, key included, e.g. when the server assigns the real id:

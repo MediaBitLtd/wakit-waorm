@@ -131,13 +131,44 @@ describe('save', () => {
     expect(user.isClean()).toBe(true)
   })
 
-  it('sets and persists lastUpdated', async () => {
-    const user = await new UserModel().hydrate({ id: 'u1', name: 'Alice' }).save()
+  it('sets and persists lastUpdated when dirty', async () => {
+    const user = new UserModel().hydrate({ id: 'u1', name: 'Alice' })
+    user.name = 'Alicia'
+    await user.save()
+
     const lastUpdated = user[paramBagSymbol]?.lastUpdated
     expect(lastUpdated).toBeDefined()
 
     const found = await new UserModel().get('u1')
     expect(found![paramBagSymbol]?.lastUpdated).toBe(lastUpdated)
+  })
+
+  it('sets lastUpdated on a model created without hydrate', async () => {
+    const user = new UserModel()
+    user.name = 'Alice'
+    await user.save()
+
+    expect(user[paramBagSymbol]?.lastUpdated).toBeDefined()
+  })
+
+  it('sets lastUpdated when the key is generated', async () => {
+    const user = await new UserModel().hydrate({ name: 'Alice' }).save()
+
+    expect(user[paramBagSymbol]?.lastUpdated).toBeDefined()
+  })
+
+  it('keeps lastUpdated when saving a clean model', async () => {
+    const user = new UserModel().hydrate({ id: 'u1', name: 'Alice' })
+    expect((await user.save())[paramBagSymbol]?.lastUpdated).toBeUndefined()
+
+    user.name = 'Alicia'
+    const lastUpdated = (await user.save())[paramBagSymbol]?.lastUpdated
+    await new Promise(resolve => setTimeout(resolve, 2))
+    await user.setSynced().save()
+
+    expect(user[paramBagSymbol]?.lastUpdated).toBe(lastUpdated)
+    expect((await new UserModel().get('u1'))![paramBagSymbol]?.lastUpdated).toBe(lastUpdated)
+    expect(user.lastSynced()!.synced_at.toISOString() > lastUpdated!.toString()).toBe(true)
   })
 })
 
@@ -169,6 +200,14 @@ describe('replace', () => {
     const found = await new UserModel().get('u1')
     expect(found!.name).toBe('Alicia')
     expect(found!.email).toBeUndefined()
+  })
+
+  it('sets lastUpdated', async () => {
+    const user = await new UserModel().hydrate({ id: 'u1', name: 'Alice' }).save()
+    await user.replace({ id: 'u2', name: 'Alice' })
+
+    expect(user[paramBagSymbol]?.lastUpdated).toBeDefined()
+    expect(user.isClean()).toBe(true)
   })
 
   it('keeps the last sync', async () => {
@@ -229,11 +268,13 @@ describe('sync state', () => {
   })
 
   it('is loaded on a model prepared with with()', async () => {
-    await new UserModel().hydrate({ id: 'u1', name: 'Alice' }).setSynced().save()
+    const user = new UserModel().hydrate({ id: 'u1', name: 'Alice' })
+    user.name = 'Alicia'
+    await user.setSynced(['failed']).save()
     const found = await new UserModel().with('posts').get('u1')
 
-    expect(found!.lastSynced()).toBeDefined()
-    expect(found![paramBagSymbol]?.lastUpdated).toBeDefined()
+    expect(found!.lastSynced()).toEqual(user.lastSynced())
+    expect(found![paramBagSymbol]?.lastUpdated).toBe(user[paramBagSymbol]?.lastUpdated)
   })
 })
 
