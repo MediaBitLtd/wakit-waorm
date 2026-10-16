@@ -327,6 +327,43 @@ export default abstract class Model <R = ModelResource, E = any> {
     }
   }
 
+  async replace<T = R>(data: T): Promise<this> {
+    if (! this.isInstance()) {
+      throw new Error('Only a hydrated model can be replaced')
+    }
+
+    const oldKey = this.getKey()
+    const bag = this.prepareBag()
+
+    for (const k in this.attributes()) {
+      // @ts-ignore
+      this[k] = undefined
+    }
+
+    // Fresh state, only the relationships to load and the last sync are kept
+    this[paramBagSymbol] = {
+      preloadRelations: bag.preloadRelations,
+      nestedRelations: bag.nestedRelations,
+      lastUpdated: undefined,
+      lastSynced: bag.lastSynced,
+      syncErrors: bag.syncErrors,
+    }
+
+    await this.hydrate(data).save()
+
+    // New record first, the old one is only removed once it's stored
+    if (oldKey && this.parseKey(oldKey) !== this.parseKey(this.getKey())) {
+      try {
+        await this.connection()?.delete(this.storeName(), this.parseKey(oldKey))
+      } catch (err) {
+        dispatch(MODEL_OP_ERROR, err)
+        throw err
+      }
+    }
+
+    return await this.loadRelationships()
+  }
+
   // belongsMany helpers: update the local keys array and save
   async attach(relationship: string, keys: WaormKey | WaormKey[]): Promise<this> {
     const relation = this.belongsManyRelation(relationship)

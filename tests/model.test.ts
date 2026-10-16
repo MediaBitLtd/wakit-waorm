@@ -141,6 +141,58 @@ describe('save', () => {
   })
 })
 
+describe('replace', () => {
+  it('swaps a generated key for a new one', async () => {
+    const user = await new UserModel().hydrate({ name: 'Alice', email: 'a@t.com' }).save()
+    const generated = user.id!
+
+    await user.replace({ id: 'u1', name: 'Alice' })
+
+    expect(user.id).toBe('u1')
+    expect(user.isNew()).toBe(false)
+    expect(await new UserModel().get(generated)).toBeUndefined()
+    expect((await new UserModel().get('u1'))!.name).toBe('Alice')
+  })
+
+  it('drops fields missing from the new data', async () => {
+    const user = await new UserModel().hydrate({ id: 'u1', name: 'Alice', email: 'a@t.com' }).save()
+    await user.replace({ id: 'u2', name: 'Bob' })
+
+    expect(user.email).toBeUndefined()
+    expect(await new UserModel().get('u2')).toMatchObject({ id: 'u2', name: 'Bob', email: undefined })
+  })
+
+  it('replaces in place when the key is unchanged', async () => {
+    const user = await new UserModel().hydrate({ id: 'u1', name: 'Alice', email: 'a@t.com' }).save()
+    await user.replace({ id: 'u1', name: 'Alicia' })
+
+    const found = await new UserModel().get('u1')
+    expect(found!.name).toBe('Alicia')
+    expect(found!.email).toBeUndefined()
+  })
+
+  it('keeps the last sync', async () => {
+    const user = await new UserModel().hydrate({ id: 'u1', name: 'Alice' }).setSynced(['failed']).save()
+    const lastSynced = user.lastSynced()
+    await user.replace({ id: 'u2', name: 'Alice' })
+
+    expect(user.lastSynced()).toEqual(lastSynced)
+    expect((await new UserModel().get('u2'))!.lastSynced()).toEqual(lastSynced)
+  })
+
+  it('reloads preloaded relationships', async () => {
+    await new PostModel().hydrate({ id: 'p1', title: 'Post 1', user_id: 'u2' }).save()
+    const user: any = await new UserModel().hydrate({ id: 'u1', name: 'Alice' }).save()
+    await user.with('posts').replace({ id: 'u2', name: 'Alice' })
+
+    expect(user.posts.map((post: PostModel) => post.id)).toEqual(['p1'])
+  })
+
+  it('throws when the model is not hydrated', async () => {
+    await expect(new UserModel().replace({ id: 'u1' })).rejects.toThrow('Only a hydrated model can be replaced')
+  })
+})
+
 describe('sync state', () => {
   it('lastSynced is undefined until synced', async () => {
     const user = await new UserModel().hydrate({ id: 'u1', name: 'Alice' }).save()
@@ -608,6 +660,14 @@ describe('deletion tracking', () => {
     await new UserModel().hydrate({ id: 'u1', name: 'Alice' }).save()
     await new UserModel().hydrate({ id: 'u1' }).delete()
 
+    expect(await deletions()).toEqual([])
+  })
+
+  it('replace removes the old record without a tombstone', async () => {
+    const activity = await new ActivityModel().get('a1')
+    await activity!.replace({ id: 'a3', title: 'Run' })
+
+    expect(await new ActivityModel().get('a1')).toBeUndefined()
     expect(await deletions()).toEqual([])
   })
 

@@ -196,6 +196,20 @@ user.lastSynced()   // { synced_at: Date, errors: [...] }, or undefined if never
 
 `setSynced()` only changes the model in memory, call `save()` to persist it. It doesn't make the model dirty.
 
+##### Replacing
+
+Replace a hydrated model's record with new data, key included, e.g. when the server assigns the real id:
+
+```typescript
+const todo = await new Todo().hydrate({ title: 'Buy milk' }).save()   // id: generated_...
+
+await todo.replace({ id: 42, title: 'Buy milk' })                     // generated_ record removed, 42 stored
+```
+
+- Fields missing from the new data are cleared. The last sync and loaded relationships are kept.
+- The old record is removed without a tombstone, after the new one is stored.
+- Throws if the model isn't hydrated.
+
 ##### Auto Key Generation
 
 Calling `save()` on a model without a key auto-generates one:
