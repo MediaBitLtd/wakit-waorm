@@ -7,6 +7,7 @@ import type {
   WaormDatabaseConnection,
   WaormCursorOptions,
   WaormSearchOptions,
+  WaormDeleteOptions,
 } from './index'
 import { dispatch, MODEL_OP_ERROR } from './events'
 
@@ -19,6 +20,33 @@ interface ModelResource extends Resource {
 let connection: WaormDatabaseConnection<any>|undefined
 
 export const setDBConnection = <T>(databaseConnection?: WaormDatabaseConnection<T>) => connection = databaseConnection
+
+export const getDBConnection = () => connection
+
+export const assertTracking = <T>(databaseConnection?: WaormDatabaseConnection<T>): WaormDatabaseConnection<T> => {
+  if (! databaseConnection?.config.trackDeletions) {
+    throw new Error('trackDeletions is not enabled on the database')
+  }
+
+  return databaseConnection
+}
+
+export const parseKey = (key: Resource['id']|undefined): number|string => {
+  if (! key) {
+    return ''
+  }
+
+  if (key.toString().trim() === '') {
+    return key.toString().trim()
+  }
+
+  // @ts-ignore
+  if (isNaN(key)) {
+    return key.toString()
+  }
+
+  return parseInt(key.toString())
+}
 
 export const generateNewId = (): string => 'generated_' + (Math.random() + 1).toString(36).substring(2)
 
@@ -57,6 +85,10 @@ export default abstract class Model <R = ModelResource, E = any> {
     return undefined
   }
 
+  trackDeletions(): boolean {
+    return false
+  }
+
   getKeyField(): string {
     return 'id'
   }
@@ -93,6 +125,19 @@ export default abstract class Model <R = ModelResource, E = any> {
     return isInstance(this.resource())
   }
 
+  lastSynced<T = unknown>(): { synced_at: Date, errors: T[] }|undefined {
+    const lastSynced = this[paramBagSymbol]?.lastSynced
+
+    if (! lastSynced) {
+      return undefined
+    }
+
+    return {
+      synced_at: new Date(lastSynced),
+      errors: (this[paramBagSymbol]?.syncErrors || []) as unknown as T[],
+    }
+  }
+
   // Mutators
   generateKey(): WaormKey {
     const key = generateNewId()
@@ -103,13 +148,20 @@ export default abstract class Model <R = ModelResource, E = any> {
     return key
   }
 
-  with(relationship: string): this {
+  with(path: string): this {
+    const [relationship = '', ...segments] = path.split('.')
+    const nested = segments.join('.')
     const relation: WaormRelationship | undefined = this.relationships()[relationship]
 
     if (! relation) {
       throw new Error(`No relationship setup for this model with the key: ${relationship}`)
     }
 
+    if (nested) {
+      // Throws now for an invalid nested segment
+      // @ts-ignore
+      (new relation.related).with(nested)
+    }
 
     this[paramBagSymbol] = this.prepareBag()
 
@@ -118,6 +170,13 @@ export default abstract class Model <R = ModelResource, E = any> {
     }
 
     this[paramBagSymbol].preloadRelations[relationship] = relation
+
+    if (nested) {
+      const nestedRelations = this[paramBagSymbol].nestedRelations ?? {}
+
+      nestedRelations[relationship] = [...new Set([...(nestedRelations[relationship] ?? []), nested])]
+      this[paramBagSymbol].nestedRelations = nestedRelations
+    }
 
     return this
   }
@@ -135,6 +194,16 @@ export default abstract class Model <R = ModelResource, E = any> {
 
     this[paramBagSymbol] = this.prepareBag(data)
 
+    // prepareBag keeps an existing bag (e.g. from with()), so take the stored params over it
+    // @ts-ignore
+    const params = data?.['$waorm:params'] || data?.[paramBagSymbol]
+
+    if (params) {
+      this[paramBagSymbol].lastUpdated = params.lastUpdated
+      this[paramBagSymbol].lastSynced = params.lastSynced
+      this[paramBagSymbol].syncErrors = params.syncErrors || []
+    }
+
     // @ts-ignore
     delete this['$waorm:params']
 
@@ -142,6 +211,14 @@ export default abstract class Model <R = ModelResource, E = any> {
     this[paramBagSymbol].instance = true
     this[paramBagSymbol].original = JSON.stringify(this.attributes())
     this[paramBagSymbol].preloadRelations = preloadedRelationships
+
+    return this
+  }
+
+  setSynced(errors: unknown[]|undefined = undefined): this {
+    this[paramBagSymbol] = this.prepareBag()
+    this[paramBagSymbol].lastSynced = new Date().toISOString()
+    this[paramBagSymbol].syncErrors = (errors || []) as E[]
 
     return this
   }
@@ -199,13 +276,17 @@ export default abstract class Model <R = ModelResource, E = any> {
       key = this.generateKey()
     }
 
-    const lastUpdated = new Date().toISOString()
+    const lastUpdated = this.isDirty() ? new Date().toISOString() : this[paramBagSymbol]?.lastUpdated
     const data = this.resourceToSave<Resource & { '$waorm:params': ModelParamBag }>()
 
     data['$waorm:params'].lastUpdated = lastUpdated
 
     try {
-      await this.connection()?.set(this.storeName(), this.parseKey(key), data)
+      if (this.trackDeletions()) {
+        await assertTracking(this.connection()).set(this.storeName(), this.parseKey(key), data, { clearTombstone: true })
+      } else {
+        await this.connection()?.set(this.storeName(), this.parseKey(key), data)
+      }
     } catch (err) {
       dispatch(MODEL_OP_ERROR, err)
       throw err
@@ -219,7 +300,7 @@ export default abstract class Model <R = ModelResource, E = any> {
     return this
   }
 
-  async delete(): Promise<boolean> {
+  async delete(options?: WaormDeleteOptions): Promise<boolean> {
     const key = this.getKey()
 
     if (! key) {
@@ -227,11 +308,65 @@ export default abstract class Model <R = ModelResource, E = any> {
     }
 
     try {
+      // Generated keys were never on the server, nothing to tell it
+      if (this.trackDeletions() && options?.track !== false && ! key.toString().startsWith('generated_')) {
+        return await assertTracking(this.connection()).delete(this.storeName(), this.parseKey(key), {
+          tombstone: {
+            store: this.storeName(),
+            key: this.parseKey(key),
+            deleted_at: new Date().toISOString(),
+            data: this.attributes(),
+          },
+        })
+      }
+
       return await this.connection()?.delete(this.storeName(), this.parseKey(key)) || false
     } catch (err) {
       dispatch(MODEL_OP_ERROR, err)
       throw err
     }
+  }
+
+  async replace<T = R>(data: T): Promise<this> {
+    if (! this.isInstance()) {
+      throw new Error('Only a hydrated model can be replaced')
+    }
+
+    const oldKey = this.getKey()
+    const bag = this.prepareBag()
+
+    for (const k in this.attributes()) {
+      // @ts-ignore
+      this[k] = undefined
+    }
+
+    // Fresh state, only the relationships to load and the last sync are kept
+    this[paramBagSymbol] = {
+      preloadRelations: bag.preloadRelations,
+      nestedRelations: bag.nestedRelations,
+      lastUpdated: undefined,
+      lastSynced: bag.lastSynced,
+      syncErrors: bag.syncErrors,
+    }
+
+    this.hydrate(data)
+
+    // hydrate() leaves it clean, but replacing is a change
+    this[paramBagSymbol]!.original = undefined
+
+    await this.save()
+
+    // New record first, the old one is only removed once it's stored
+    if (oldKey && this.parseKey(oldKey) !== this.parseKey(this.getKey())) {
+      try {
+        await this.connection()?.delete(this.storeName(), this.parseKey(oldKey))
+      } catch (err) {
+        dispatch(MODEL_OP_ERROR, err)
+        throw err
+      }
+    }
+
+    return await this.loadRelationships()
   }
 
   // belongsMany helpers: update the local keys array and save
@@ -308,6 +443,8 @@ export default abstract class Model <R = ModelResource, E = any> {
           const model = this.newInstance().hydrate(resources[k])
           // @ts-ignore // we will always have it preloaded
           model[paramBagSymbol].preloadRelations = this[paramBagSymbol]?.preloadRelations
+          // @ts-ignore
+          model[paramBagSymbol].nestedRelations = this[paramBagSymbol]?.nestedRelations
           items.push(await model.loadRelationships())
         }
       }
@@ -337,6 +474,8 @@ export default abstract class Model <R = ModelResource, E = any> {
           const model = this.newInstance().hydrate(resources[k])
           // @ts-ignore // we will always have it preloaded
           model[paramBagSymbol].preloadRelations = this[paramBagSymbol]?.preloadRelations
+          // @ts-ignore
+          model[paramBagSymbol].nestedRelations = this[paramBagSymbol]?.nestedRelations
           items.push(await model.loadRelationships())
         }
       }
@@ -388,9 +527,19 @@ export default abstract class Model <R = ModelResource, E = any> {
     return this
   }
 
-  protected async loadRelationship(relationship: string, relation: WaormRelationship): Promise<void> {
+  protected relatedInstance(relationship: string, relation: WaormRelationship): Model {
     // @ts-ignore
-    const model = (new relation.related)
+    const model: Model = (new relation.related)
+
+    for (const path of this[paramBagSymbol]?.nestedRelations?.[relationship] ?? []) {
+      model.with(path)
+    }
+
+    return model
+  }
+
+  protected async loadRelationship(relationship: string, relation: WaormRelationship): Promise<void> {
+    const model = this.relatedInstance(relationship, relation)
 
     switch (relation.relationship) {
       case 'belongs':
@@ -410,8 +559,7 @@ export default abstract class Model <R = ModelResource, E = any> {
 
         for (const key of this.relatedKeys(relation)) {
           // Fresh instance per key, get() hydrates in place
-          // @ts-ignore
-          const item = await (new relation.related).get(this.parseKey(key))
+          const item = await this.relatedInstance(relationship, relation).get(this.parseKey(key))
 
           if (item) {
             items.push(item)
@@ -447,19 +595,6 @@ export default abstract class Model <R = ModelResource, E = any> {
   }
 
   protected parseKey(key: Resource['id']|undefined): number|string {
-    if (! key) {
-      return ''
-    }
-
-    if (key.toString().trim() === '') {
-      return key.toString().trim()
-    }
-
-    // @ts-ignore
-    if (isNaN(key)) {
-      return key.toString()
-    }
-
-    return parseInt(key.toString())
+    return parseKey(key)
   }
 }

@@ -2,6 +2,7 @@ import type { WaormDatabaseConfig, WaormDatabaseConnection } from './index'
 import indexedDB from './plugins/indexedDB'
 import { setDBConnection } from './model'
 import { DB_INIT_ERROR, dispatch } from './events'
+import { withDeletionsStore } from './deletions'
 
 const databases: {[k: string]: WaormDatabaseConnection<any>} = {}
 
@@ -16,10 +17,12 @@ export const initDB = async <T = IDBDatabase> (config: WaormDatabaseConfig<T>) =
     return databases[config.name] as WaormDatabaseConnection<T>
   }
 
+  const pluginConfig = withDeletionsStore(config)
+
   try {
     databases[config.name] = config.plugin
-      ? await config.plugin.setup(config)
-      : await indexedDB.setup(config as WaormDatabaseConfig<any>)
+      ? await config.plugin.setup(pluginConfig)
+      : await indexedDB.setup(pluginConfig as WaormDatabaseConfig<any>)
   } catch (err) {
     dispatch(DB_INIT_ERROR, err)
     throw err

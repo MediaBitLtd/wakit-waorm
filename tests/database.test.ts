@@ -3,6 +3,7 @@ import { initDB } from '../database'
 import { clearDatabases } from '../database'
 import { setDBConnection } from '../model'
 import memoryPlugin from './helpers/memoryPlugin'
+import { DELETIONS_STORE } from '../deletions'
 
 describe('initDB', () => {
   beforeEach(() => {
@@ -28,6 +29,19 @@ describe('initDB', () => {
     const conn1 = await initDB(config)
     const conn2 = await initDB(config)
     expect(conn1).toBe(conn2)
+  })
+
+  it('adds the deletions store when tracking deletions', async () => {
+    const conn = await initDB({ ...makeConfig('db-tracked'), trackDeletions: true })
+
+    expect(conn.config.stores.map(store => store.name)).toEqual(['users', DELETIONS_STORE])
+    expect(conn.getEngine()!.stores.has(DELETIONS_STORE)).toBe(true)
+  })
+
+  it('does not add the deletions store by default', async () => {
+    const conn = await initDB(makeConfig('db-untracked'))
+
+    expect(conn.config.stores.map(store => store.name)).toEqual(['users'])
   })
 
   it('returns different connections for different names', async () => {

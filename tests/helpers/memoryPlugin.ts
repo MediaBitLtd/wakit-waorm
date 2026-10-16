@@ -1,5 +1,6 @@
 import type { Resource, WaormConnectionPlugin, WaormDatabaseConfig, WaormDatabaseConnection, WaormCursorOptions, WaormSearchOptions } from '../../index'
 import { isValueOperator, matchesValue } from '../../operators'
+import { DELETIONS_STORE, tombstoneKey } from '../../deletions'
 
 type Store = Map<string, Resource>
 type IndexMap = Map<string, string[]> // indexValue -> keys[]
@@ -89,6 +90,23 @@ const createDB = (config: WaormDatabaseConfig<MemoryEngine>): WaormDatabaseConne
     engine.indexes.set(store.name, storeIndexes)
   })
 
+  const set: WaormDatabaseConnection<MemoryEngine>['set'] = async (store, key, data, options) => {
+    engine.stores.get(store)!.set(key.toString(), data)
+    updateIndexes(engine, config, store, key.toString(), data)
+    if (options?.clearTombstone) {
+      await remove(DELETIONS_STORE, tombstoneKey(store, key))
+    }
+    return data
+  }
+
+  const remove: WaormDatabaseConnection<MemoryEngine>['delete'] = async (store, key, options) => {
+    if (options?.tombstone) {
+      await set(DELETIONS_STORE, tombstoneKey(store, key), options.tombstone as unknown as Resource)
+    }
+    removeFromIndexes(engine, config, store, key.toString())
+    return engine.stores.get(store)?.delete(key.toString()) || false
+  }
+
   return {
     name: config.name,
     config,
@@ -96,15 +114,8 @@ const createDB = (config: WaormDatabaseConfig<MemoryEngine>): WaormDatabaseConne
     get: async (store, key) => {
       return engine.stores.get(store)?.get(key.toString())
     },
-    set: async (store, key, data) => {
-      engine.stores.get(store)!.set(key.toString(), data)
-      updateIndexes(engine, config, store, key.toString(), data)
-      return data
-    },
-    delete: async (store, key) => {
-      removeFromIndexes(engine, config, store, key.toString())
-      return engine.stores.get(store)?.delete(key.toString()) || false
-    },
+    set,
+    delete: remove,
     where: async (store, index, search, options?: WaormSearchOptions) => {
       const operator = options?.operator || 'equals'
       const storeIndexes = engine.indexes.get(store)

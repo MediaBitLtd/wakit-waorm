@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { initDB } from '../database'
 import { clearDatabases } from '../database'
 import { paramBagSymbol, setDBConnection } from '../model'
-import { UserModel, PostModel, SlugModel, TagModel } from './helpers/fixtures'
+import { clearDeletion, deletions } from '../deletions'
+import { ActivityModel, UserModel, PostModel, SlugModel, TagModel } from './helpers/fixtures'
 import memoryPlugin from './helpers/memoryPlugin'
 
 const dbConfig = {
@@ -130,13 +131,150 @@ describe('save', () => {
     expect(user.isClean()).toBe(true)
   })
 
-  it('sets and persists lastUpdated', async () => {
-    const user = await new UserModel().hydrate({ id: 'u1', name: 'Alice' }).save()
+  it('sets and persists lastUpdated when dirty', async () => {
+    const user = new UserModel().hydrate({ id: 'u1', name: 'Alice' })
+    user.name = 'Alicia'
+    await user.save()
+
     const lastUpdated = user[paramBagSymbol]?.lastUpdated
     expect(lastUpdated).toBeDefined()
 
     const found = await new UserModel().get('u1')
     expect(found![paramBagSymbol]?.lastUpdated).toBe(lastUpdated)
+  })
+
+  it('sets lastUpdated on a model created without hydrate', async () => {
+    const user = new UserModel()
+    user.name = 'Alice'
+    await user.save()
+
+    expect(user[paramBagSymbol]?.lastUpdated).toBeDefined()
+  })
+
+  it('sets lastUpdated when the key is generated', async () => {
+    const user = await new UserModel().hydrate({ name: 'Alice' }).save()
+
+    expect(user[paramBagSymbol]?.lastUpdated).toBeDefined()
+  })
+
+  it('keeps lastUpdated when saving a clean model', async () => {
+    const user = new UserModel().hydrate({ id: 'u1', name: 'Alice' })
+    expect((await user.save())[paramBagSymbol]?.lastUpdated).toBeUndefined()
+
+    user.name = 'Alicia'
+    const lastUpdated = (await user.save())[paramBagSymbol]?.lastUpdated
+    await new Promise(resolve => setTimeout(resolve, 2))
+    await user.setSynced().save()
+
+    expect(user[paramBagSymbol]?.lastUpdated).toBe(lastUpdated)
+    expect((await new UserModel().get('u1'))![paramBagSymbol]?.lastUpdated).toBe(lastUpdated)
+    expect(user.lastSynced()!.synced_at.toISOString() > lastUpdated!.toString()).toBe(true)
+  })
+})
+
+describe('replace', () => {
+  it('swaps a generated key for a new one', async () => {
+    const user = await new UserModel().hydrate({ name: 'Alice', email: 'a@t.com' }).save()
+    const generated = user.id!
+
+    await user.replace({ id: 'u1', name: 'Alice' })
+
+    expect(user.id).toBe('u1')
+    expect(user.isNew()).toBe(false)
+    expect(await new UserModel().get(generated)).toBeUndefined()
+    expect((await new UserModel().get('u1'))!.name).toBe('Alice')
+  })
+
+  it('drops fields missing from the new data', async () => {
+    const user = await new UserModel().hydrate({ id: 'u1', name: 'Alice', email: 'a@t.com' }).save()
+    await user.replace({ id: 'u2', name: 'Bob' })
+
+    expect(user.email).toBeUndefined()
+    expect(await new UserModel().get('u2')).toMatchObject({ id: 'u2', name: 'Bob', email: undefined })
+  })
+
+  it('replaces in place when the key is unchanged', async () => {
+    const user = await new UserModel().hydrate({ id: 'u1', name: 'Alice', email: 'a@t.com' }).save()
+    await user.replace({ id: 'u1', name: 'Alicia' })
+
+    const found = await new UserModel().get('u1')
+    expect(found!.name).toBe('Alicia')
+    expect(found!.email).toBeUndefined()
+  })
+
+  it('sets lastUpdated', async () => {
+    const user = await new UserModel().hydrate({ id: 'u1', name: 'Alice' }).save()
+    await user.replace({ id: 'u2', name: 'Alice' })
+
+    expect(user[paramBagSymbol]?.lastUpdated).toBeDefined()
+    expect(user.isClean()).toBe(true)
+  })
+
+  it('keeps the last sync', async () => {
+    const user = await new UserModel().hydrate({ id: 'u1', name: 'Alice' }).setSynced(['failed']).save()
+    const lastSynced = user.lastSynced()
+    await user.replace({ id: 'u2', name: 'Alice' })
+
+    expect(user.lastSynced()).toEqual(lastSynced)
+    expect((await new UserModel().get('u2'))!.lastSynced()).toEqual(lastSynced)
+  })
+
+  it('reloads preloaded relationships', async () => {
+    await new PostModel().hydrate({ id: 'p1', title: 'Post 1', user_id: 'u2' }).save()
+    const user: any = await new UserModel().hydrate({ id: 'u1', name: 'Alice' }).save()
+    await user.with('posts').replace({ id: 'u2', name: 'Alice' })
+
+    expect(user.posts.map((post: PostModel) => post.id)).toEqual(['p1'])
+  })
+
+  it('throws when the model is not hydrated', async () => {
+    await expect(new UserModel().replace({ id: 'u1' })).rejects.toThrow('Only a hydrated model can be replaced')
+  })
+})
+
+describe('sync state', () => {
+  it('lastSynced is undefined until synced', async () => {
+    const user = await new UserModel().hydrate({ id: 'u1', name: 'Alice' }).save()
+
+    expect(user.lastSynced()).toBeUndefined()
+  })
+
+  it('setSynced records the time with no errors', () => {
+    const user = new UserModel().hydrate({ id: 'u1', name: 'Alice' }).setSynced()
+
+    expect(user.lastSynced()).toEqual({ synced_at: expect.any(Date), errors: [] })
+    expect(Date.now() - user.lastSynced()!.synced_at.getTime()).toBeLessThan(1000)
+  })
+
+  it('setSynced records errors, and a later setSynced clears them', () => {
+    const user = new UserModel().hydrate({ id: 'u1', name: 'Alice' }).setSynced([{ field: 'email' }])
+
+    expect(user.lastSynced<{ field: string }>()!.errors).toEqual([{ field: 'email' }])
+    expect(user.setSynced().lastSynced()!.errors).toEqual([])
+  })
+
+  it('setSynced does not make the model dirty', () => {
+    const user = new UserModel().hydrate({ id: 'u1', name: 'Alice' }).setSynced()
+
+    expect(user.isClean()).toBe(true)
+  })
+
+  it('persists on save', async () => {
+    const user = await new UserModel().hydrate({ id: 'u1', name: 'Alice' }).setSynced(['failed']).save()
+    const found = await new UserModel().get('u1')
+
+    expect(found!.lastSynced()).toEqual({ synced_at: user.lastSynced()!.synced_at, errors: ['failed'] })
+    expect(await user.connection()!.get('users', 'u1')).not.toHaveProperty('lastSynced')
+  })
+
+  it('is loaded on a model prepared with with()', async () => {
+    const user = new UserModel().hydrate({ id: 'u1', name: 'Alice' })
+    user.name = 'Alicia'
+    await user.setSynced(['failed']).save()
+    const found = await new UserModel().with('posts').get('u1')
+
+    expect(found!.lastSynced()).toEqual(user.lastSynced())
+    expect(found![paramBagSymbol]?.lastUpdated).toBe(user[paramBagSymbol]?.lastUpdated)
   })
 })
 
@@ -414,6 +552,93 @@ describe('belongsMany relationships', () => {
   })
 })
 
+describe('nested relationships', () => {
+  const ids = (models: any[]) => models.map(model => model.id).sort()
+  const byId = (models: any[], id: string) => models.find(model => model.id === id)
+  const tagNames = (post: any) => post.tags.map((tag: TagModel) => tag.name)
+
+  beforeEach(async () => {
+    await new UserModel().hydrate({ id: 'u1', name: 'Alice', email: 'a@t.com' }).save()
+    await new UserModel().hydrate({ id: 'u2', name: 'Bob', email: 'b@t.com' }).save()
+    await new TagModel().hydrate({ id: 't1', name: 'js' }).save()
+    await new TagModel().hydrate({ id: 't2', name: 'ts' }).save()
+    await new PostModel().hydrate({ id: 'p1', title: 'Post 1', user_id: 'u1', tag_ids: ['t2', 't1'] }).save()
+    await new PostModel().hydrate({ id: 'p2', title: 'Post 2', user_id: 'u1', tag_ids: ['t1'] }).save()
+    await new PostModel().hydrate({ id: 'p3', title: 'Post 3', user_id: 'u2' }).save()
+  })
+
+  it('loads many then belongsMany', async () => {
+    const user: any = await new UserModel().with('posts.tags').get('u1')
+
+    expect(ids(user.posts)).toEqual(['p1', 'p2'])
+    expect(tagNames(byId(user.posts, 'p1'))).toEqual(['ts', 'js'])
+    expect(tagNames(byId(user.posts, 'p2'))).toEqual(['js'])
+  })
+
+  it('loads belongs then many', async () => {
+    const post: any = await new PostModel().with('author.posts').get('p1')
+
+    expect(post.author.name).toBe('Alice')
+    expect(ids(post.author.posts)).toEqual(['p1', 'p2'])
+  })
+
+  it('loads belongsMany then many', async () => {
+    const post: any = await new PostModel().with('tags.posts').get('p1')
+
+    expect(ids(post.tags[0].posts)).toEqual(['p1'])
+    expect(ids(post.tags[1].posts)).toEqual(['p1', 'p2'])
+  })
+
+  it('loads three levels deep', async () => {
+    const user: any = await new UserModel().with('posts.author.posts').get('u1')
+
+    expect(byId(user.posts, 'p1').author.name).toBe('Alice')
+    expect(ids(byId(user.posts, 'p1').author.posts)).toEqual(['p1', 'p2'])
+  })
+
+  it('loads nested paths for all and many', async () => {
+    const users: any[] = await new UserModel().with('posts.tags').all()
+
+    expect(tagNames(byId(byId(users, 'u1').posts, 'p1'))).toEqual(['ts', 'js'])
+    expect(byId(byId(users, 'u2').posts, 'p3').tags).toEqual([])
+
+    const posts: any[] = await new PostModel().with('author.posts').many('title', 'Post')
+
+    expect(ids(byId(posts, 'p3').author.posts)).toEqual(['p3'])
+  })
+
+  it('merges chained paths without duplicates', async () => {
+    const user: any = new UserModel().with('posts').with('posts.tags').with('posts.tags').with('posts.author')
+
+    expect(user[paramBagSymbol].nestedRelations).toEqual({ posts: ['tags', 'author'] })
+
+    await user.get('u1')
+    expect(tagNames(byId(user.posts, 'p1'))).toEqual(['ts', 'js'])
+    expect(byId(user.posts, 'p1').author.name).toBe('Alice')
+  })
+
+  it('throws at with() for an unknown nested relationship', () => {
+    expect(() => new UserModel().with('posts.nope')).toThrow('No relationship setup')
+    expect(() => new UserModel().with('posts.tags.nope')).toThrow('No relationship setup')
+  })
+
+  it('nested relationships are not persisted and keep the model clean', async () => {
+    const user = await new UserModel().with('posts.tags').get('u1')
+    expect(user!.isClean()).toBe(true)
+
+    await user!.save()
+    expect(await user!.connection()!.get('users', 'u1')).not.toHaveProperty('posts')
+  })
+
+  it('attach reloads nested relationships', async () => {
+    const post: any = await new PostModel().with('tags.posts').get('p2')
+    await post.attach('tags', 't2')
+
+    expect(tagNames(post)).toEqual(['js', 'ts'])
+    expect(ids(post.tags[1].posts)).toEqual(['p1', 'p2'])
+  })
+})
+
 describe('custom key field', () => {
   it('uses slug as key', async () => {
     const model = new SlugModel().hydrate({ slug: 'my-slug', name: 'Test' })
@@ -430,6 +655,107 @@ describe('custom key field', () => {
     await model.save()
     expect(model.slug).toBeDefined()
     expect(model.slug!.startsWith('generated_')).toBe(true)
+  })
+})
+
+describe('deletion tracking', () => {
+  const trackedConfig = {
+    ...dbConfig,
+    trackDeletions: true,
+    stores: [...dbConfig.stores, { name: 'activities', indexes: [{ name: 'title' }] }],
+  }
+
+  beforeEach(async () => {
+    clearDatabases()
+    setDBConnection()
+    await initDB({ ...trackedConfig, name: 'model-tracked-' + Math.random() })
+    await new ActivityModel().hydrate({ id: 'a1', title: 'Run' }).save()
+    await new ActivityModel().hydrate({ id: 'a2', title: 'Swim' }).save()
+  })
+
+  it('delete writes a tombstone with the record data', async () => {
+    const activity = await new ActivityModel().get('a1')
+    expect(await activity!.delete()).toBe(true)
+
+    expect(await new ActivityModel().get('a1')).toBeUndefined()
+    expect(await deletions('activities')).toEqual([
+      { store: 'activities', key: 'a1', deleted_at: expect.any(String), data: { id: 'a1', title: 'Run' } },
+    ])
+  })
+
+  it('track: false skips the tombstone', async () => {
+    await (await new ActivityModel().get('a1'))!.delete({ track: false })
+
+    expect(await new ActivityModel().get('a1')).toBeUndefined()
+    expect(await deletions('activities')).toEqual([])
+  })
+
+  it('generated keys skip the tombstone', async () => {
+    const activity = await new ActivityModel().hydrate({ title: 'Local' }).save()
+    await activity.delete()
+
+    expect(await deletions()).toEqual([])
+  })
+
+  it('models without trackDeletions are untouched', async () => {
+    await new UserModel().hydrate({ id: 'u1', name: 'Alice' }).save()
+    await new UserModel().hydrate({ id: 'u1' }).delete()
+
+    expect(await deletions()).toEqual([])
+  })
+
+  it('replace removes the old record without a tombstone', async () => {
+    const activity = await new ActivityModel().get('a1')
+    await activity!.replace({ id: 'a3', title: 'Run' })
+
+    expect(await new ActivityModel().get('a1')).toBeUndefined()
+    expect(await deletions()).toEqual([])
+  })
+
+  it('save clears a pending tombstone', async () => {
+    await new ActivityModel().hydrate({ id: 'a1' }).delete()
+    await new ActivityModel().hydrate({ id: 'a1', title: 'Run again' }).save()
+
+    expect(await deletions()).toEqual([])
+    expect((await new ActivityModel().get('a1'))!.title).toBe('Run again')
+  })
+
+  it('deletions filters by store and sorts by deleted_at', async () => {
+    await new ActivityModel().hydrate({ id: 'a2' }).delete()
+    await new Promise(resolve => setTimeout(resolve, 2))
+    await new ActivityModel().hydrate({ id: 'a1' }).delete()
+
+    expect((await deletions('activities')).map(d => d.key)).toEqual(['a2', 'a1'])
+    expect(await deletions('users')).toEqual([])
+  })
+
+  it('clearDeletion removes the tombstone and normalizes the key', async () => {
+    await new ActivityModel().hydrate({ id: 5, title: 'Numeric' }).save()
+    await new ActivityModel().hydrate({ id: 5 }).delete()
+    await new ActivityModel().hydrate({ id: 'a1' }).delete()
+
+    expect(await clearDeletion('activities', '5')).toBe(true)
+    expect((await deletions('activities')).map(d => d.key)).toEqual(['a1'])
+  })
+
+  it('accepts an explicit connection', async () => {
+    const other = await initDB({ ...trackedConfig, name: 'model-tracked-other', default: false })
+    await other.delete('activities', 'x1', { tombstone: { store: 'activities', key: 'x1', deleted_at: new Date().toISOString(), data: {} } })
+
+    expect((await deletions('activities', other)).map(d => d.key)).toEqual(['x1'])
+    expect(await deletions('activities')).toEqual([])
+    await clearDeletion('activities', 'x1', other)
+    expect(await deletions('activities', other)).toEqual([])
+  })
+
+  it('throws when the database does not track deletions', async () => {
+    clearDatabases()
+    setDBConnection()
+    await initDB({ ...dbConfig, stores: trackedConfig.stores, name: 'model-untracked-' + Math.random() })
+
+    await expect(new ActivityModel().hydrate({ id: 'a1' }).save()).rejects.toThrow('trackDeletions is not enabled')
+    await expect(new ActivityModel().hydrate({ id: 'a1' }).delete()).rejects.toThrow('trackDeletions is not enabled')
+    await expect(deletions()).rejects.toThrow('trackDeletions is not enabled')
   })
 })
 

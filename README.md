@@ -125,6 +125,19 @@ await post.sync('tags', ['t1', 't3'])    // replace all keys
 
 `attach`, `detach` and `sync` dedupe the keys, save the model (including any unsaved changes) and reload the relation if it was loaded with `with()`. They only work on `belongsMany` relationships. Changing `multiEntry` on an existing indexedDB index requires a version bump.
 
+##### Nested Relationships
+
+Use dot notation to load relationships of related models, at any depth:
+
+```typescript
+const post = await new Post().with('tags.posts').get('p1')        // post.tags[n].posts
+const user = await new User().with('posts.tags').with('posts.author').all()
+```
+
+- Chained `with()` calls on the same relationship are merged.
+- An unknown relationship anywhere in the path throws at `with()`.
+- Each related record is loaded with its own query, so deep paths over many records can be slow.
+
 ##### Custom Key Fields
 
 By default models use `id` as the primary key. Override `getKeyField()` to use a different field:
@@ -169,6 +182,35 @@ user.isDirty()    // true
 ```
 
 Standalone functions `isDirty`, `isNew`, `isInstance` are also exported for use with plain resource objects.
+
+##### Sync State
+
+Record when a model was last synced with a server, and any errors it returned:
+
+```typescript
+await user.setSynced().save()                       // synced, no errors
+await user.setSynced([{ field: 'email' }]).save()   // synced with errors
+
+user.lastSynced()   // { synced_at: Date, errors: [...] }, or undefined if never synced
+```
+
+`setSynced()` only changes the model in memory, call `save()` to persist it. It doesn't make the model dirty.
+
+`save()` only updates `lastUpdated` when the model is dirty..
+
+##### Replacing
+
+Replace a hydrated model's record with new data, key included, e.g. when the server assigns the real id:
+
+```typescript
+const todo = await new Todo().hydrate({ title: 'Buy milk' }).save()   // id: generated_...
+
+await todo.replace({ id: 42, title: 'Buy milk' })                     // generated_ record removed, 42 stored
+```
+
+- Fields missing from the new data are cleared. The last sync and loaded relationships are kept.
+- The old record is removed without a tombstone, after the new one is stored.
+- Throws if the model isn't hydrated.
 
 ##### Auto Key Generation
 
@@ -263,6 +305,40 @@ When synced:
 - Missing stores and indexes are created
 - Indexes no longer in `stores` are removed, and indexes whose `path`, `unique` or `multiEntry` changed are recreated
 - Stores no longer in `stores` are kept, unless `dropUnknownStores: true` is set — **this deletes their data**
+
+#### Deletion Tracking
+
+To tell a server about local deletes, enable `trackDeletions` on the database and on each model to track. Deleting a
+tracked model writes a tombstone to the reserved `$waorm:deletions` store, in the same transaction as the delete:
+
+```typescript
+import { initDB, Model, collect, deletions, clearDeletion } from '@wakit/waorm'
+
+await initDB({ name: 'MyDatabase', version: 2, trackDeletions: true, stores: [...] })
+
+class Activity extends Model {
+  storeName() { return 'activities' }
+  trackDeletions() { return true }
+}
+
+await activity.delete()                    // removes the record, writes a tombstone
+await activity.delete({ track: false })    // no tombstone, e.g. applying a delete from the server
+await collect(query).delete()              // every item is tracked too
+
+await deletions('activities')              // [{ store, key, deleted_at, data }], oldest first
+await deletions()                          // every store
+await clearDeletion('activities', key)     // once the server confirmed the delete
+```
+
+- `data` holds the record's attributes at delete time, for servers that need more than the key.
+- Keys starting with `generated_` were never on the server, so no tombstone is written.
+- Saving a record clears its pending tombstone.
+- A tracked model throws if the database doesn't have `trackDeletions` enabled.
+- `deletions()` and `clearDeletion()` use the default connection, pass a connection as the last argument for another one.
+- On IndexedDB, enabling `trackDeletions` on an existing database needs a `version` bump to create the store.
+- Custom plugins must honour the connection options: `delete(store, key, { tombstone })` writes the tombstone to
+  `$waorm:deletions` under the key `` `${store}:${key}` ``, and `set(store, key, data, { clearTombstone: true })`
+  removes it. Both should happen in the same transaction as the record write when the engine supports it.
 
 #### Version Changes
 
