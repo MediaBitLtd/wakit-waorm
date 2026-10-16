@@ -183,6 +183,19 @@ user.isDirty()    // true
 
 Standalone functions `isDirty`, `isNew`, `isInstance` are also exported for use with plain resource objects.
 
+##### Sync State
+
+Record when a model was last synced with a server, and any errors it returned:
+
+```typescript
+await user.setSynced().save()                       // synced, no errors
+await user.setSynced([{ field: 'email' }]).save()   // synced with errors
+
+user.lastSynced()   // { synced_at: Date, errors: [...] }, or undefined if never synced
+```
+
+`setSynced()` only changes the model in memory, call `save()` to persist it. It doesn't make the model dirty.
+
 ##### Auto Key Generation
 
 Calling `save()` on a model without a key auto-generates one:

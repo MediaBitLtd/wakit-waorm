@@ -141,6 +141,50 @@ describe('save', () => {
   })
 })
 
+describe('sync state', () => {
+  it('lastSynced is undefined until synced', async () => {
+    const user = await new UserModel().hydrate({ id: 'u1', name: 'Alice' }).save()
+
+    expect(user.lastSynced()).toBeUndefined()
+  })
+
+  it('setSynced records the time with no errors', () => {
+    const user = new UserModel().hydrate({ id: 'u1', name: 'Alice' }).setSynced()
+
+    expect(user.lastSynced()).toEqual({ synced_at: expect.any(Date), errors: [] })
+    expect(Date.now() - user.lastSynced()!.synced_at.getTime()).toBeLessThan(1000)
+  })
+
+  it('setSynced records errors, and a later setSynced clears them', () => {
+    const user = new UserModel().hydrate({ id: 'u1', name: 'Alice' }).setSynced([{ field: 'email' }])
+
+    expect(user.lastSynced<{ field: string }>()!.errors).toEqual([{ field: 'email' }])
+    expect(user.setSynced().lastSynced()!.errors).toEqual([])
+  })
+
+  it('setSynced does not make the model dirty', () => {
+    const user = new UserModel().hydrate({ id: 'u1', name: 'Alice' }).setSynced()
+
+    expect(user.isClean()).toBe(true)
+  })
+
+  it('persists on save', async () => {
+    const user = await new UserModel().hydrate({ id: 'u1', name: 'Alice' }).setSynced(['failed']).save()
+    const found = await new UserModel().get('u1')
+
+    expect(found!.lastSynced()).toEqual({ synced_at: user.lastSynced()!.synced_at, errors: ['failed'] })
+    expect(await user.connection()!.get('users', 'u1')).not.toHaveProperty('lastSynced')
+  })
+
+  it('is loaded on a model prepared with with()', async () => {
+    await new UserModel().hydrate({ id: 'u1', name: 'Alice' }).setSynced().save()
+    const found = await new UserModel().with('posts').get('u1')
+
+    expect(found!.lastSynced()).toBeDefined()
+    expect(found![paramBagSymbol]?.lastUpdated).toBeDefined()
+  })
+})
+
 describe('get', () => {
   it('returns hydrated model for existing key', async () => {
     await new UserModel().hydrate({ id: 'u1', name: 'Alice', email: 'a@b.com' }).save()

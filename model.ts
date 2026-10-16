@@ -125,6 +125,19 @@ export default abstract class Model <R = ModelResource, E = any> {
     return isInstance(this.resource())
   }
 
+  lastSynced<T = unknown>(): { synced_at: Date, errors: T[] }|undefined {
+    const lastSynced = this[paramBagSymbol]?.lastSynced
+
+    if (! lastSynced) {
+      return undefined
+    }
+
+    return {
+      synced_at: new Date(lastSynced),
+      errors: (this[paramBagSymbol]?.syncErrors || []) as unknown as T[],
+    }
+  }
+
   // Mutators
   generateKey(): WaormKey {
     const key = generateNewId()
@@ -181,6 +194,16 @@ export default abstract class Model <R = ModelResource, E = any> {
 
     this[paramBagSymbol] = this.prepareBag(data)
 
+    // prepareBag keeps an existing bag (e.g. from with()), so take the stored params over it
+    // @ts-ignore
+    const params = data?.['$waorm:params'] || data?.[paramBagSymbol]
+
+    if (params) {
+      this[paramBagSymbol].lastUpdated = params.lastUpdated
+      this[paramBagSymbol].lastSynced = params.lastSynced
+      this[paramBagSymbol].syncErrors = params.syncErrors || []
+    }
+
     // @ts-ignore
     delete this['$waorm:params']
 
@@ -188,6 +211,14 @@ export default abstract class Model <R = ModelResource, E = any> {
     this[paramBagSymbol].instance = true
     this[paramBagSymbol].original = JSON.stringify(this.attributes())
     this[paramBagSymbol].preloadRelations = preloadedRelationships
+
+    return this
+  }
+
+  setSynced(errors: unknown[]|undefined = undefined): this {
+    this[paramBagSymbol] = this.prepareBag()
+    this[paramBagSymbol].lastSynced = new Date().toISOString()
+    this[paramBagSymbol].syncErrors = (errors || []) as E[]
 
     return this
   }
