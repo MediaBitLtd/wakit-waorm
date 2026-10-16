@@ -252,7 +252,7 @@ export default abstract class Model <R = ModelResource, E = any> {
 
     try {
       if (this.trackDeletions()) {
-        await assertTracking(this.connection()).setTracked(this.storeName(), this.parseKey(key), data)
+        await assertTracking(this.connection()).set(this.storeName(), this.parseKey(key), data, { clearTombstone: true })
       } else {
         await this.connection()?.set(this.storeName(), this.parseKey(key), data)
       }
@@ -279,11 +279,13 @@ export default abstract class Model <R = ModelResource, E = any> {
     try {
       // Generated keys were never on the server, nothing to tell it
       if (this.trackDeletions() && options?.track !== false && ! key.toString().startsWith('generated_')) {
-        return await assertTracking(this.connection()).deleteTracked(this.storeName(), this.parseKey(key), {
-          store: this.storeName(),
-          key: this.parseKey(key),
-          deleted_at: new Date().toISOString(),
-          data: this.attributes(),
+        return await assertTracking(this.connection()).delete(this.storeName(), this.parseKey(key), {
+          tombstone: {
+            store: this.storeName(),
+            key: this.parseKey(key),
+            deleted_at: new Date().toISOString(),
+            data: this.attributes(),
+          },
         })
       }
 

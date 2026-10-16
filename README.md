@@ -307,7 +307,9 @@ await clearDeletion('activities', key)     // once the server confirmed the dele
 - A tracked model throws if the database doesn't have `trackDeletions` enabled.
 - `deletions()` and `clearDeletion()` use the default connection, pass a connection as the last argument for another one.
 - On IndexedDB, enabling `trackDeletions` on an existing database needs a `version` bump to create the store.
-- Custom plugins must implement `deleteTracked(store, key, tombstone)` and `setTracked(store, key, data)`.
+- Custom plugins must honour the connection options: `delete(store, key, { tombstone })` writes the tombstone to
+  `$waorm:deletions` under the key `` `${store}:${key}` ``, and `set(store, key, data, { clearTombstone: true })`
+  removes it. Both should happen in the same transaction as the record write when the engine supports it.
 
 #### Version Changes
 

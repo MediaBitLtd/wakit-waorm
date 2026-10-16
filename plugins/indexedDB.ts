@@ -96,52 +96,32 @@ const createDatabaseConnection = (config: WaormDatabaseConfig<IDBDatabase>, idb:
         .objectStore(store)
         .get(key))
     },
-    set: async (store, key, data) => {
-      await handleRequest<Resource|undefined>(idb
-        .transaction(store, 'readwrite')
-        .objectStore(store)
-        .put(data, key))
+    set: async (store, key, data, options) => {
+      // Tombstone in the same transaction, a failed request aborts both
+      const transaction = idb.transaction(options?.clearTombstone ? [store, DELETIONS_STORE] : store, 'readwrite')
+      const request = transaction.objectStore(store).put(data, key)
+
+      await handleRequest(options?.clearTombstone
+        ? transaction.objectStore(DELETIONS_STORE).delete(tombstoneKey(store, key))
+        : request)
 
       return data
     },
-    delete: async (store, key) => {
+    delete: async (store, key, options) => {
+      const tombstone = options?.tombstone
+
       try {
-        await handleRequest<Resource|undefined>(idb
-          .transaction(store, 'readwrite')
-          .objectStore(store)
-          .delete(key))
+        const transaction = idb.transaction(tombstone ? [store, DELETIONS_STORE] : store, 'readwrite')
+        const request = transaction.objectStore(store).delete(key)
+
+        await handleRequest(tombstone
+          ? transaction.objectStore(DELETIONS_STORE).put(tombstone, tombstoneKey(store, key))
+          : request)
       } catch (err) {
         return false
       }
 
       return true
-    },
-    deleteTracked: async (store, key, tombstone) => {
-      // One transaction, a failed request aborts both
-      const transaction = idb.transaction([store, DELETIONS_STORE], 'readwrite')
-
-      try {
-        transaction.objectStore(store).delete(key)
-
-        await handleRequest<IDBValidKey>(transaction
-          .objectStore(DELETIONS_STORE)
-          .put(tombstone, tombstoneKey(store, key)))
-      } catch (err) {
-        return false
-      }
-
-      return true
-    },
-    setTracked: async (store, key, data) => {
-      const transaction = idb.transaction([store, DELETIONS_STORE], 'readwrite')
-
-      transaction.objectStore(store).put(data, key)
-
-      await handleRequest<undefined>(transaction
-        .objectStore(DELETIONS_STORE)
-        .delete(tombstoneKey(store, key)))
-
-      return data
     },
     where: async (store, index, search, options) => {
       const limit = options?.limit

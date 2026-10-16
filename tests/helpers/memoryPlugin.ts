@@ -90,13 +90,19 @@ const createDB = (config: WaormDatabaseConfig<MemoryEngine>): WaormDatabaseConne
     engine.indexes.set(store.name, storeIndexes)
   })
 
-  const set: WaormDatabaseConnection<MemoryEngine>['set'] = async (store, key, data) => {
+  const set: WaormDatabaseConnection<MemoryEngine>['set'] = async (store, key, data, options) => {
     engine.stores.get(store)!.set(key.toString(), data)
     updateIndexes(engine, config, store, key.toString(), data)
+    if (options?.clearTombstone) {
+      await remove(DELETIONS_STORE, tombstoneKey(store, key))
+    }
     return data
   }
 
-  const remove: WaormDatabaseConnection<MemoryEngine>['delete'] = async (store, key) => {
+  const remove: WaormDatabaseConnection<MemoryEngine>['delete'] = async (store, key, options) => {
+    if (options?.tombstone) {
+      await set(DELETIONS_STORE, tombstoneKey(store, key), options.tombstone as unknown as Resource)
+    }
     removeFromIndexes(engine, config, store, key.toString())
     return engine.stores.get(store)?.delete(key.toString()) || false
   }
@@ -110,15 +116,6 @@ const createDB = (config: WaormDatabaseConfig<MemoryEngine>): WaormDatabaseConne
     },
     set,
     delete: remove,
-    deleteTracked: async (store, key, tombstone) => {
-      await set(DELETIONS_STORE, tombstoneKey(store, key), tombstone as unknown as Resource)
-      return remove(store, key)
-    },
-    setTracked: async (store, key, data) => {
-      await set(store, key, data)
-      await remove(DELETIONS_STORE, tombstoneKey(store, key))
-      return data
-    },
     where: async (store, index, search, options?: WaormSearchOptions) => {
       const operator = options?.operator || 'equals'
       const storeIndexes = engine.indexes.get(store)

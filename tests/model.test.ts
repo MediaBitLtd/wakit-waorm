@@ -595,7 +595,7 @@ describe('deletion tracking', () => {
 
   it('accepts an explicit connection', async () => {
     const other = await initDB({ ...trackedConfig, name: 'model-tracked-other', default: false })
-    await other.deleteTracked('activities', 'x1', { store: 'activities', key: 'x1', deleted_at: new Date().toISOString(), data: {} })
+    await other.delete('activities', 'x1', { tombstone: { store: 'activities', key: 'x1', deleted_at: new Date().toISOString(), data: {} } })
 
     expect((await deletions('activities', other)).map(d => d.key)).toEqual(['x1'])
     expect(await deletions('activities')).toEqual([])

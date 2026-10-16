@@ -103,7 +103,7 @@ const createDB = (config: WaormDatabaseConfig<WindowLocalStorage>): WaormDatabas
     localStorage.setItem(`WAORM:__${config.name}_${store.name}`, JSON.stringify(indexTable))
   })
 
-  const set: WaormDatabaseConnection<WindowLocalStorage>['set'] = async (store, key, data) => {
+  const set: WaormDatabaseConnection<WindowLocalStorage>['set'] = async (store, key, data, options) => {
     const storeConfig = config.stores.find(s => s.name === store)
     if (! storeConfig) {
       throw new Error('Invalid store')
@@ -142,13 +142,22 @@ const createDB = (config: WaormDatabaseConfig<WindowLocalStorage>): WaormDatabas
 
     localStorage.setItem(`WAORM:${config.name}_${store}:${key.toString()}`, JSON.stringify(data))
 
+    if (options?.clearTombstone) {
+      await remove(DELETIONS_STORE, tombstoneKey(store, key))
+    }
+
     return data
   }
 
-  const remove: WaormDatabaseConnection<WindowLocalStorage>['delete'] = async (store, key) => {
+  const remove: WaormDatabaseConnection<WindowLocalStorage>['delete'] = async (store, key, options) => {
     const storeConfig = config.stores.find(s => s.name === store)
     if (! storeConfig) {
       throw new Error('Invalid store')
+    }
+
+    // Tombstone first, a failed record delete then leaves it for save() to clear
+    if (options?.tombstone) {
+      await set(DELETIONS_STORE, tombstoneKey(store, key), options.tombstone as unknown as Resource)
     }
 
     const indexTable = JSON.parse(localStorage.getItem(`WAORM:__${config.name}_${store}`) || '{}')
@@ -182,18 +191,6 @@ const createDB = (config: WaormDatabaseConfig<WindowLocalStorage>): WaormDatabas
     get: async (store, key) => getByKey(config.name, store, key.toString()),
     set,
     delete: remove,
-    // Tombstone first, a failed record delete then leaves it for save() to clear
-    deleteTracked: async (store, key, tombstone) => {
-      await set(DELETIONS_STORE, tombstoneKey(store, key), tombstone as unknown as Resource)
-
-      return remove(store, key)
-    },
-    setTracked: async (store, key, data) => {
-      await set(store, key, data)
-      await remove(DELETIONS_STORE, tombstoneKey(store, key))
-
-      return data
-    },
     where:  async (store, index, search, options) => {
       const limit = options?.limit
       const offset = options?.offset || 0

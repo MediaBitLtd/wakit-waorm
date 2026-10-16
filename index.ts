@@ -39,14 +39,20 @@ export interface WaormDatabaseConnection<T> {
   config: WaormDatabaseConfig<T>;
   getEngine: () => T | undefined;
   get: (store: string, key: WaormKey) => Promise<Resource | undefined>;
-  set: (store: string, key: WaormKey, data: Resource) => Promise<Resource>;
+  set: (store: string, key: WaormKey, data: Resource, options?: WaormConnectionSetOptions) => Promise<Resource>;
   all: (store: string, index?: string, options?: WaormCursorOptions) => Promise<Resource[]|Resource|undefined>;
-  delete: (store: string, key: WaormKey) => Promise<boolean>;
+  delete: (store: string, key: WaormKey, options?: WaormConnectionDeleteOptions) => Promise<boolean>;
   where: (store: string, index: string, search: string, options?: WaormSearchOptions) => Promise<Resource[]|Resource|undefined>;
-  // Delete the record and write its tombstone together
-  deleteTracked: (store: string, key: WaormKey, tombstone: WaormDeletion) => Promise<boolean>;
-  // Write the record and remove its tombstone together
-  setTracked: (store: string, key: WaormKey, data: Resource) => Promise<Resource>;
+}
+
+export interface WaormConnectionSetOptions {
+  // Remove the record's tombstone in the same transaction
+  clearTombstone?: boolean;
+}
+
+export interface WaormConnectionDeleteOptions {
+  // Write this tombstone in the same transaction
+  tombstone?: WaormDeletion;
 }
 
 export interface WaormDeletion<T = unknown> {
