@@ -1,5 +1,5 @@
 import type { Resource, WaormConnectionPlugin, WaormDatabaseConfig, WaormDatabaseConnection, WaormCursorOptions, WaormSearchOptions } from '../../index'
-import { isValueOperator, matchesValue } from '../../operators'
+import { betweenBounds, compareValues, isValueOperator, matchesValue, matchBetween } from '../../operators'
 import { DELETIONS_STORE, tombstoneKey } from '../../deletions'
 
 type Store = Map<string, Resource>
@@ -130,6 +130,19 @@ const createDB = (config: WaormDatabaseConfig<MemoryEngine>): WaormDatabaseConne
         const indexConfig = config.stores.find(s => s.name === store)?.indexes.find(i => i.name === index)
         const fieldPath = indexConfig?.path || index
         const items = [...storeData.values()].filter(r => matchesValue((r as any)[fieldPath], operator))
+
+        return applyPagination(items, options)
+      }
+
+      if (operator === 'between') {
+        const bounds = betweenBounds(search)
+        const indexConfig = config.stores.find(s => s.name === store)?.indexes.find(i => i.name === index)
+        const fieldPath = indexConfig?.path || index
+        const items = [...storeData.values()]
+          .map(r => ({ value: matchBetween((r as any)[fieldPath], bounds, options), r }))
+          .filter(match => match.value !== undefined)
+          .sort((a, b) => compareValues(a.value, b.value))
+          .map(match => match.r)
 
         return applyPagination(items, options)
       }

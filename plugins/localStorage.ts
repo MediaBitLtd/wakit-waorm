@@ -1,5 +1,5 @@
 import type { Resource, WaormConnectionPlugin, WaormDatabaseConfig, WaormDatabaseConnection } from '../index'
-import { isValueOperator, matchesValue } from '../operators'
+import { betweenBounds, compareValues, isValueOperator, matchesValue, matchBetween } from '../operators'
 import { DELETIONS_STORE, tombstoneKey } from '../deletions'
 
 const getByKey = (db: string, store: string, key?: string): Resource|undefined => {
@@ -226,6 +226,37 @@ const createDB = (config: WaormDatabaseConfig<WindowLocalStorage>): WaormDatabas
         }
 
         return items
+      }
+
+      if (operator === 'between') {
+        const bounds = betweenBounds(search)
+        const indexTable = JSON.parse(localStorage.getItem(`WAORM:__${config.name}_${store}`) || '{}')
+        const field = indexTable[index]?.key
+        const matches: { value: unknown, resource: Resource }[] = []
+
+        if (! field) {
+          return items
+        }
+
+        // Scan the store, index keys are strings and would compare numbers wrong
+        for (const key of indexTable.__keys ?? []) {
+          const resource = getByKey(config.name, store, key.toString())
+          const value = resource ? matchBetween((resource as any)[field], bounds, options) : undefined
+
+          if (resource && value !== undefined) {
+            matches.push({ value, resource })
+          }
+        }
+
+        matches.sort((a, b) => compareValues(a.value, b.value))
+
+        if (direction !== 'asc') {
+          matches.reverse()
+        }
+
+        return matches
+          .slice(offset, limit ? offset + limit : undefined)
+          .map(match => match.resource)
       }
 
       const indexValues = JSON.parse(localStorage.getItem(`WAORM:__${config.name}_${store}_${index}`) || '{}')

@@ -360,6 +360,11 @@ describe('many', () => {
     expect(results.every(u => ! u.name!.includes('Ali'))).toBe(true)
   })
 
+  it('between operator matches range', async () => {
+    const results = await new UserModel().many('name', ['Alice', 'Bob'], { operator: 'between' })
+    expect(results.map(u => u.name)).toEqual(['Alice', 'Alicia', 'Bob'])
+  })
+
   it('respects limit', async () => {
     const results = await new UserModel().many('email', 'test.com', { operator: 'includes', limit: 2 })
     expect(results.length).toBe(2)

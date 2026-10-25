@@ -233,6 +233,7 @@ console.log(user.id) // 'generated_...'
 | `not_equals`   | every record whose value differs from `search`           | full index scan      |
 | `includes`     | value contains `search` (substring)                      | full index scan      |
 | `not_includes` | value doesn't contain `search`                           | full index scan      |
+| `between`      | value within `search` = `[min, max]`, inclusive          | index range (indexedDB) / full store scan (localStorage) |
 | `is_null`      | `null` or missing                                        | full store scan      |
 | `is_not_null`  | anything but `null` / missing (`''`, `0`, `false`, `[]` included) | full store scan |
 | `empty`        | `null`, missing, `''`, `[]` or `{}`                      | full store scan      |
@@ -243,12 +244,14 @@ console.log(user.id) // 'generated_...'
 - **Full store scan:** reads every record in the store, ordered by key. `search` is ignored.
 - Comparisons are case-sensitive on indexedDB and case-insensitive on localStorage (except `equals`, exact on both).
 - On a multiEntry index, each array element is matched on its own.
+- `between`: pass `lowerOpen` / `upperOpen` to exclude a bound. Results are ordered by value. Values only match bounds of the same type (`'20'` isn't in `[1, 30]`). `Date` bounds compare as ISO strings, the way dates are stored.
 
 ```typescript
 await new User().many('name', 'ali')                                     // includes
 await new User().many('role', 'admin', { operator: 'equals_many' })
 await new User().many('deleted_at', null, { operator: 'is_null' })
 await new Post().many('tag_ids', null, { operator: 'empty' })            // posts without tags
+await new User().many('age', [18, 30], { operator: 'between', upperOpen: true })  // 18 <= age < 30
 ```
 
 ##### Collecting Results

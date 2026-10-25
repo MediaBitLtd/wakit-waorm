@@ -7,7 +7,7 @@ export const makeConfig = <T>(name: string, trackDeletions = false): WaormDataba
   version: 1,
   trackDeletions,
   stores: [
-    { name: 'users', indexes: [{ name: 'name' }, { name: 'email' }, { name: 'mail', path: 'email' }, { name: 'roles', multiEntry: true }] },
+    { name: 'users', indexes: [{ name: 'name' }, { name: 'email' }, { name: 'mail', path: 'email' }, { name: 'roles', multiEntry: true }, { name: 'age' }, { name: 'created', path: 'created_at' }] },
   ],
 })
 
@@ -173,6 +173,47 @@ export const runPluginSuite = <T>(connect: () => Promise<WaormDatabaseConnection
       expect(ids(await conn.where('users', 'email', '', { operator: 'empty', direction: 'desc' }))).toEqual(['u7', 'u6', 'u5'])
       expect(ids(await conn.where('users', 'email', '', { operator: 'empty', offset: 1 }))).toEqual(['u6', 'u7'])
       expect(ids(await conn.where('users', 'email', '', { operator: 'empty', offset: 1, limit: 1 }))).toEqual(['u6'])
+    })
+  })
+
+  describe('between operator', () => {
+    const ids = (result: Resource[] | Resource | undefined) => (result as Resource[]).map(r => r.id)
+
+    beforeEach(async () => {
+      await conn.set('users', 'u1', { id: 'u1', name: 'Alice', age: 9 } as Resource)
+      await conn.set('users', 'u2', { id: 'u2', name: 'Bob', age: 30 } as Resource)
+      await conn.set('users', 'u3', { id: 'u3', name: 'Charlie', age: 10 } as Resource)
+      await conn.set('users', 'u4', { id: 'u4', name: 'Alicia', age: '20' } as unknown as Resource)
+    })
+
+    it('matches inclusive numeric range ordered by value', async () => {
+      expect(ids(await conn.where('users', 'age', [9, 30], { operator: 'between' }))).toEqual(['u1', 'u3', 'u2'])
+    })
+
+    it('excludes open bounds', async () => {
+      expect(ids(await conn.where('users', 'age', [9, 30], { operator: 'between', lowerOpen: true }))).toEqual(['u3', 'u2'])
+      expect(ids(await conn.where('users', 'age', [9, 30], { operator: 'between', upperOpen: true }))).toEqual(['u1', 'u3'])
+    })
+
+    it('matches string range', async () => {
+      expect(ids(await conn.where('users', 'name', ['Alice', 'Bob'], { operator: 'between' }))).toEqual(['u1', 'u4', 'u2'])
+    })
+
+    it('applies direction, offset and limit', async () => {
+      expect(ids(await conn.where('users', 'age', [0, 100], { operator: 'between', direction: 'desc' }))).toEqual(['u2', 'u3', 'u1'])
+      expect(ids(await conn.where('users', 'age', [0, 100], { operator: 'between', offset: 1, limit: 1 }))).toEqual(['u3'])
+    })
+
+    it('compares Date bounds as ISO strings', async () => {
+      await conn.set('users', 'u5', { id: 'u5', name: 'Eve', created_at: '2026-01-15T00:00:00.000Z' } as Resource)
+      await conn.set('users', 'u6', { id: 'u6', name: 'Frank', created_at: '2026-03-01T00:00:00.000Z' } as Resource)
+
+      const result = await conn.where('users', 'created', [new Date('2026-01-01'), new Date('2026-02-01')], { operator: 'between' })
+      expect(ids(result)).toEqual(['u5'])
+    })
+
+    it('throws without [min, max]', async () => {
+      await expect(conn.where('users', 'age', 9, { operator: 'between' })).rejects.toThrow()
     })
   })
 

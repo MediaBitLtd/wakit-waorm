@@ -5,7 +5,7 @@ import Model, { generateNewId, generateNewSlug, isDirty, isNew, isInstance } fro
 
 export type WaormValueOperator = 'is_null' | 'is_not_null' | 'empty' | 'not_empty'
 
-export type WaormCursorOperator = 'equals' | 'equals_many' | 'includes' | 'not_equals' | 'not_includes' | WaormValueOperator
+export type WaormCursorOperator = 'equals' | 'equals_many' | 'includes' | 'not_equals' | 'not_includes' | 'between' | WaormValueOperator
 
 export type WaormRelationshipBag = { [k: string]: WaormRelationship }
 
@@ -42,7 +42,7 @@ export interface WaormDatabaseConnection<T> {
   set: (store: string, key: WaormKey, data: Resource, options?: WaormConnectionSetOptions) => Promise<Resource>;
   all: (store: string, index?: string, options?: WaormCursorOptions) => Promise<Resource[]|Resource|undefined>;
   delete: (store: string, key: WaormKey, options?: WaormConnectionDeleteOptions) => Promise<boolean>;
-  where: (store: string, index: string, search: string, options?: WaormSearchOptions) => Promise<Resource[]|Resource|undefined>;
+  where: (store: string, index: string, search: any, options?: WaormSearchOptions) => Promise<Resource[]|Resource|undefined>;
 }
 
 export interface WaormConnectionSetOptions {
@@ -98,6 +98,9 @@ export interface WaormCursorOptions {
 
 export interface WaormSearchOptions extends WaormCursorOptions {
   operator?: WaormCursorOperator;
+  // between only: exclude the min / max bound
+  lowerOpen?: boolean;
+  upperOpen?: boolean;
 }
 
 export interface WaormStore {

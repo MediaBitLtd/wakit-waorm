@@ -5,7 +5,7 @@ import type {
   WaormDatabaseConnection,
 } from '../index'
 import { DB_BLOCKED, DB_VERSION_CHANGE, dispatch } from '../events'
-import { isValueOperator, matchesValue } from '../operators'
+import { betweenBounds, isValueOperator, matchesValue } from '../operators'
 import { DELETIONS_STORE, tombstoneKey } from '../deletions'
 
 interface CursorRequestEventTarget extends EventTarget{
@@ -169,6 +169,11 @@ const createDatabaseConnection = (config: WaormDatabaseConfig<IDBDatabase>, idb:
 
       switch (operator) {
         case 'equals': range = IDBKeyRange.only(search); break
+        case 'between': {
+          const [min, max] = betweenBounds(search)
+          range = IDBKeyRange.bound(min, max, options?.lowerOpen, options?.upperOpen)
+          break
+        }
       }
 
       await handleRequest<IDBCursorWithValue>(idb
@@ -199,6 +204,7 @@ const createDatabaseConnection = (config: WaormDatabaseConfig<IDBDatabase>, idb:
 
             switch (operator) {
               case 'equals':
+              case 'between':
                 items.push(cursor.value)
                 break
               case 'equals_many':
